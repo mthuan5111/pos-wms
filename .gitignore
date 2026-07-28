@@ -3,6 +3,10 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+# Ignore sensitive configuration files
+POS_WMS.WebApi/appsettings.json
+POS_WMS.WebApi/appsettings.Development.json
+
 # User-specific files
 *.rsuser
 *.suo

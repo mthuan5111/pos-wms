@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="POS_WMS.Application/POS_WMS.Application.csproj" />
+  <Project Path="POS_WMS.Domain/POS_WMS.Domain.csproj" />
+  <Project Path="POS_WMS.Infrastructure/POS_WMS.Infrastructure.csproj" />
+  <Project Path="POS_WMS.WebApi/POS_WMS.WebApi.csproj" />
+</Solution>
