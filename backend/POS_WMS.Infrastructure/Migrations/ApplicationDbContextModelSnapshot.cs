@@ -22,6 +22,66 @@ namespace POS_WMS.Infrastructure.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("POS_WMS.Domain.Entities.AuditLog", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("CorrelationId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Details")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("EntityId")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Result")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("UserName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Action");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AuditLogs");
+                });
+
             modelBuilder.Entity("POS_WMS.Domain.Entities.Category", b =>
                 {
                     b.Property<int>("Id")
@@ -82,8 +142,15 @@ namespace POS_WMS.Infrastructure.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("OfflineReferenceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<DateTime>("ReceiptDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("Remarks")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<int>("SupplierId")
                         .HasColumnType("int");
@@ -95,6 +162,10 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("OfflineReferenceId")
+                        .IsUnique()
+                        .HasFilter("[OfflineReferenceId] IS NOT NULL");
 
                     b.HasIndex("SupplierId");
 
@@ -293,6 +364,53 @@ namespace POS_WMS.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("POS_WMS.Domain.Entities.StockMovement", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BalanceAfter")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("MovementType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ReferenceId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ReferenceType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("ProductId");
+
+                    b.ToTable("StockMovements");
+                });
+
             modelBuilder.Entity("POS_WMS.Domain.Entities.Supplier", b =>
                 {
                     b.Property<int>("Id")
@@ -375,58 +493,83 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("POS_WMS.Domain.Entities.AuditLog", b =>
+                {
+                    b.HasOne("POS_WMS.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.Supplier", null)
+                    b.HasOne("POS_WMS.Domain.Entities.Supplier", "Supplier")
                         .WithMany()
                         .HasForeignKey("SupplierId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("POS_WMS.Domain.Entities.User", null)
+                    b.HasOne("POS_WMS.Domain.Entities.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Supplier");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceiptDetail", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.GoodsReceipt", null)
-                        .WithMany()
+                    b.HasOne("POS_WMS.Domain.Entities.GoodsReceipt", "GoodsReceipt")
+                        .WithMany("GoodsReceiptDetails")
                         .HasForeignKey("GoodsReceiptId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("POS_WMS.Domain.Entities.Product", null)
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
                         .WithMany()
                         .HasForeignKey("ProductId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("GoodsReceipt");
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Inventory", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.Product", null)
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
                         .WithOne()
                         .HasForeignKey("POS_WMS.Domain.Entities.Inventory", "ProductId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Order", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.Customer", null)
+                    b.HasOne("POS_WMS.Domain.Entities.Customer", "Customer")
                         .WithMany()
                         .HasForeignKey("CustomerId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("POS_WMS.Domain.Entities.User", null)
+                    b.HasOne("POS_WMS.Domain.Entities.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Customer");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.OrderDetail", b =>
@@ -437,22 +580,42 @@ namespace POS_WMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("POS_WMS.Domain.Entities.Product", null)
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
                         .WithMany()
                         .HasForeignKey("ProductId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Order");
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Product", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.Category", null)
+                    b.HasOne("POS_WMS.Domain.Entities.Category", "Category")
                         .WithMany()
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("POS_WMS.Domain.Entities.StockMovement", b =>
+                {
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
+                {
+                    b.Navigation("GoodsReceiptDetails");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Order", b =>

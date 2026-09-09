@@ -19,26 +19,35 @@ namespace POS_WMS.Infrastructure.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IConfiguration _configuration;
         private readonly PasswordHasher<User> _passwordHasher;
+        private readonly IAuditLogService _auditLogService;
 
-        public AuthService(IUserRepository userRepository, IUnitOfWork unitOfWork, IConfiguration configuration)
+        public AuthService(IUserRepository userRepository, IUnitOfWork unitOfWork, IConfiguration configuration, IAuditLogService auditLogService)
         {
             _userRepository = userRepository;
             _unitOfWork = unitOfWork;
             _configuration = configuration;
             _passwordHasher = new PasswordHasher<User>();
+            _auditLogService = auditLogService;
         }
 
         public async Task<AuthResponseDTO?> LoginAsync(LoginRequestDTO request)
         {
             var user = await _userRepository.GetByUsernameAsync(request.Username);
-            if (user == null || !user.IsActive)
+            if (user == null)
             {
+                // Can't log to DB due to FK constraint for UserId
+                return null;
+            }
+            if (!user.IsActive)
+            {
+                await _auditLogService.LogActionAsync(user.Id, request.Username ?? "Unknown", "LOGIN_FAILED", "System", null, "Tài khoản bị khóa", "FAILED");
                 return null;
             }
 
             var result = _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
             if (result == PasswordVerificationResult.Failed)
             {
+                await _auditLogService.LogActionAsync(user.Id, user.Username, "LOGIN_FAILED", "User", user.Id.ToString(), "Sai mật khẩu", "FAILED");
                 return null;
             }
 
@@ -46,12 +55,17 @@ namespace POS_WMS.Infrastructure.Services
             var refreshToken = GenerateRefreshToken();
 
             user.RefreshToken = refreshToken;
-            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(double.Parse(_configuration["Jwt:RefreshTokenExpirationDays"]!));
+            var refreshTokenDaysStr = _configuration["Jwt:RefreshTokenExpirationDays"];
+            var refreshTokenDays = double.TryParse(refreshTokenDaysStr, out var days) ? days : 7;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(refreshTokenDays);
             _userRepository.Update(user);
             await _unitOfWork.SaveChangesAsync();
 
+            await _auditLogService.LogActionAsync(user.Id, user.Username, "LOGIN_SUCCESS", "User", user.Id.ToString(), $"Đăng nhập thành công ({user.Role})", "SUCCESS");
+
             return new AuthResponseDTO
             {
+                Id = user.Id,
                 AccessToken = accessToken,
                 RefreshToken = refreshToken,
                 Username = user.Username,
@@ -77,6 +91,7 @@ namespace POS_WMS.Infrastructure.Services
 
             return new AuthResponseDTO
             {
+                Id = user.Id,
                 AccessToken = newAccessToken,
                 RefreshToken = newRefreshToken,
                 Username = user.Username,
@@ -89,6 +104,10 @@ namespace POS_WMS.Infrastructure.Services
         {
             var tokenHandler = new JwtSecurityTokenHandler();
             var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]!);
+
+            var accessTokenMinutesStr = _configuration["Jwt:AccessTokenExpirationMinutes"];
+            var accessTokenMinutes = double.TryParse(accessTokenMinutesStr, out var mins) ? mins : 60;
+
             var tokenDescriptor = new SecurityTokenDescriptor
             {
                 Subject = new ClaimsIdentity(new[]
@@ -97,7 +116,7 @@ namespace POS_WMS.Infrastructure.Services
                     new Claim(ClaimTypes.Name, user.Username),
                     new Claim(ClaimTypes.Role, user.Role.ToString())
                 }),
-                Expires = DateTime.UtcNow.AddMinutes(double.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"]!)),
+                Expires = DateTime.UtcNow.AddMinutes(accessTokenMinutes),
                 Issuer = _configuration["Jwt:Issuer"],
                 Audience = _configuration["Jwt:Audience"],
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)

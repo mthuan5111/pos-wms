@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace POS_WMS.Domain.Entities
 {
     public class GoodsReceipt
@@ -7,5 +9,13 @@ namespace POS_WMS.Domain.Entities
         public int UserId { get; set; }
         public DateTime ReceiptDate { get; set; } = DateTime.UtcNow;
         public decimal TotalAmount { get; set; }
+        public string? Remarks { get; set; }
+        public string? OfflineReferenceId { get; set; }
+
+        [ForeignKey("SupplierId")]
+        public Supplier? Supplier { get; set; }
+        [ForeignKey("UserId")]
+        public User? User { get; set; }
+        public ICollection<GoodsReceiptDetail> GoodsReceiptDetails { get; set; } = new List<GoodsReceiptDetail>();
     }
 }

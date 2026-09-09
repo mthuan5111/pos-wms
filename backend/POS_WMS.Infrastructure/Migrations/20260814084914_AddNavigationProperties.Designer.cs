@@ -12,15 +12,15 @@ using POS_WMS.Infrastructure.Persistence;
 namespace POS_WMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260709153351_InitialCreate")]
-    partial class InitialCreate
+    [Migration("20260814084914_AddNavigationProperties")]
+    partial class AddNavigationProperties
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -75,14 +75,6 @@ namespace POS_WMS.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Customers");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Name = "Khách vãng lai",
-                            Phone = "0000000000"
-                        });
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
@@ -96,7 +88,13 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.Property<DateTime>("ReceiptDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("Remarks")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<int>("SupplierId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SupplierId1")
                         .HasColumnType("int");
 
                     b.Property<decimal>("TotalAmount")
@@ -105,11 +103,18 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.Property<int>("UserId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("UserId1")
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
                     b.HasIndex("SupplierId");
 
+                    b.HasIndex("SupplierId1");
+
                     b.HasIndex("UserId");
+
+                    b.HasIndex("UserId1");
 
                     b.ToTable("GoodsReceipts", t =>
                         {
@@ -131,7 +136,13 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.Property<int>("GoodsReceiptId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("GoodsReceiptId1")
+                        .HasColumnType("int");
+
                     b.Property<int>("ProductId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ProductId1")
                         .HasColumnType("int");
 
                     b.Property<int>("Quantity")
@@ -141,7 +152,11 @@ namespace POS_WMS.Infrastructure.Migrations
 
                     b.HasIndex("GoodsReceiptId");
 
+                    b.HasIndex("GoodsReceiptId1");
+
                     b.HasIndex("ProductId");
+
+                    b.HasIndex("ProductId1");
 
                     b.ToTable("GoodsReceiptDetails", t =>
                         {
@@ -162,6 +177,9 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.Property<int>("ProductId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("ProductId1")
+                        .HasColumnType("int");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .IsRequired()
@@ -175,6 +193,8 @@ namespace POS_WMS.Infrastructure.Migrations
 
                     b.HasIndex("ProductId")
                         .IsUnique();
+
+                    b.HasIndex("ProductId1");
 
                     b.ToTable("Inventories", t =>
                         {
@@ -191,6 +211,9 @@ namespace POS_WMS.Infrastructure.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<int>("CustomerId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("CustomerId1")
                         .HasColumnType("int");
 
                     b.Property<string>("OfflineReferenceId")
@@ -210,15 +233,22 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.Property<int>("UserId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("UserId1")
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CustomerId");
+
+                    b.HasIndex("CustomerId1");
 
                     b.HasIndex("OfflineReferenceId")
                         .IsUnique()
                         .HasFilter("[OfflineReferenceId] IS NOT NULL");
 
                     b.HasIndex("UserId");
+
+                    b.HasIndex("UserId1");
 
                     b.ToTable("Orders", t =>
                         {
@@ -240,6 +270,9 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.Property<int>("ProductId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("ProductId1")
+                        .HasColumnType("int");
+
                     b.Property<int>("Quantity")
                         .HasColumnType("int");
 
@@ -251,6 +284,8 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.HasIndex("OrderId");
 
                     b.HasIndex("ProductId");
+
+                    b.HasIndex("ProductId1");
 
                     b.ToTable("OrderDetails", t =>
                         {
@@ -275,6 +310,10 @@ namespace POS_WMS.Infrastructure.Migrations
 
                     b.Property<int>("CategoryId")
                         .HasColumnType("int");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
@@ -351,13 +390,19 @@ namespace POS_WMS.Infrastructure.Migrations
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)");
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<string>("Phone")
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("RefreshToken")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Role")
                         .IsRequired()
@@ -374,18 +419,6 @@ namespace POS_WMS.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            IsActive = true,
-                            Name = "Administrator",
-                            PasswordHash = "123456",
-                            Phone = "0999999999",
-                            Role = "Admin",
-                            Username = "admin"
-                        });
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
@@ -396,11 +429,23 @@ namespace POS_WMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("POS_WMS.Domain.Entities.Supplier", "Supplier")
+                        .WithMany()
+                        .HasForeignKey("SupplierId1");
+
                     b.HasOne("POS_WMS.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("POS_WMS.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId1");
+
+                    b.Navigation("Supplier");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceiptDetail", b =>
@@ -411,11 +456,23 @@ namespace POS_WMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("POS_WMS.Domain.Entities.GoodsReceipt", "GoodsReceipt")
+                        .WithMany("GoodsReceiptDetails")
+                        .HasForeignKey("GoodsReceiptId1");
+
                     b.HasOne("POS_WMS.Domain.Entities.Product", null)
                         .WithMany()
                         .HasForeignKey("ProductId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId1");
+
+                    b.Navigation("GoodsReceipt");
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Inventory", b =>
@@ -425,6 +482,12 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasForeignKey("POS_WMS.Domain.Entities.Inventory", "ProductId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId1");
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Order", b =>
@@ -435,17 +498,29 @@ namespace POS_WMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("POS_WMS.Domain.Entities.Customer", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId1");
+
                     b.HasOne("POS_WMS.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("POS_WMS.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId1");
+
+                    b.Navigation("Customer");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.OrderDetail", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.Order", null)
-                        .WithMany()
+                    b.HasOne("POS_WMS.Domain.Entities.Order", "Order")
+                        .WithMany("OrderDetails")
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -455,6 +530,14 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasForeignKey("ProductId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("POS_WMS.Domain.Entities.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId1");
+
+                    b.Navigation("Order");
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Product", b =>
@@ -464,6 +547,16 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
+                {
+                    b.Navigation("GoodsReceiptDetails");
+                });
+
+            modelBuilder.Entity("POS_WMS.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderDetails");
                 });
 #pragma warning restore 612, 618
         }

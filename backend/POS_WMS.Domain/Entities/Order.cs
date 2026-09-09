@@ -1,4 +1,6 @@
 using POS_WMS.Domain.Enums;
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace POS_WMS.Domain.Entities
 {
     public class Order
@@ -10,6 +12,11 @@ namespace POS_WMS.Domain.Entities
         public DateTime OrderDate { get; set; } = DateTime.UtcNow;
         public OrderStatus Status { get; set; } = OrderStatus.Pending;
         public string? OfflineReferenceId { get; set; }
+        
+        [ForeignKey("UserId")]
+        public User? User { get; set; }
+        [ForeignKey("CustomerId")]
+        public Customer? Customer { get; set; }
         public ICollection<OrderDetail> OrderDetails { get; set; } = new List<OrderDetail>();
     }
 }

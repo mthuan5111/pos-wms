@@ -16,7 +16,12 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.mthuan5111.frontend"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -26,10 +31,15 @@
       "expo-sqlite",
       [
         "expo-camera",
-      {
-        "cameraPermission": "Ứng dụng cần truy cập Camera để quét mã vạch sản phẩm."
-      }
+        {
+          "cameraPermission": "Ứng dụng cần truy cập Camera để quét mã vạch sản phẩm."
+        }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "154caa7b-b06b-4c00-ab59-b414f718b48c"
+      }
+    }
   }
 }

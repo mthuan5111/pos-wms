@@ -1,0 +1,55 @@
+# ─── Build artifacts ───
+**/bin/
+**/obj/
+.vs/
+.vscode/
+.git/
+
+# ─── Configuration files with potential secrets ───
+**/appsettings.json
+**/appsettings.Development.json
+**/appsettings.Production.json
+# Keep example config for reference
+!**/appsettings.example.json
+
+# ─── Environment files ───
+**/.env
+**/.env.*
+
+# ─── Generated SQL scripts ───
+*.sql
+
+# ─── Test projects and scripts ───
+POS_WMS.IntegrationTests/
+*.ps1
+
+# ─── Database and backup files ───
+*.db
+*.sqlite
+*.sqlite3
+*.mdf
+*.ldf
+*.bak
+*.dump
+
+# ─── Keys and certificates ───
+*.pfx
+*.p12
+*.pem
+*.key
+*.jks
+*.keystore
+*.cer
+*.crt
+
+# ─── Credential files ───
+*service-account*.json
+*credentials*.json
+secrets.json
+
+# ─── Nested artifact directory ───
+backend/
+
+# ─── Test results and coverage ───
+TestResults/
+coverage/
