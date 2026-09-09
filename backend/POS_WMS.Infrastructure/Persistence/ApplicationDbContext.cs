@@ -20,6 +20,8 @@ public class ApplicationDbContext : DbContext
     public DbSet<Product> Products { get; set; }
     public DbSet<Supplier> Suppliers { get; set; }
     public DbSet<User> Users { get; set; }
+    public DbSet<AuditLog> AuditLogs { get; set; }
+    public DbSet<StockMovement> StockMovements { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,6 +49,8 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<GoodsReceipt>(entity =>
         {
             entity.Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
+            entity.Property(e => e.OfflineReferenceId).HasMaxLength(100);
+            entity.HasIndex(e => e.OfflineReferenceId).IsUnique().HasFilter("[OfflineReferenceId] IS NOT NULL");
             entity.ToTable(t => t.HasCheckConstraint("CK_GoodsReceipt_TotalAmount_NonNegative", "[TotalAmount] >= 0"));
         });
 
@@ -112,50 +116,74 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(e => e.Username).IsUnique();
         });
 
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.Property(e => e.UserName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.EntityId).HasMaxLength(50);
+            entity.Property(e => e.Details).HasMaxLength(1000);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.CorrelationId).HasMaxLength(100);
+            entity.Property(e => e.Result).HasMaxLength(50);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Action);
+        });
+
+        modelBuilder.Entity<StockMovement>(entity =>
+        {
+            entity.Property(e => e.MovementType).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.ReferenceType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.CreatedBy).IsRequired().HasMaxLength(100);
+            entity.HasIndex(e => e.ProductId);
+            entity.HasIndex(e => e.CreatedAt);
+        });
+
         modelBuilder.Entity<GoodsReceipt>()
-        .HasOne<Supplier>()
+        .HasOne(g => g.Supplier)
         .WithMany()
         .HasForeignKey(g => g.SupplierId)
         .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<GoodsReceipt>()
-        .HasOne<User>()
+        .HasOne(g => g.User)
         .WithMany()
         .HasForeignKey(g => g.UserId)
         .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<GoodsReceiptDetail>()
-        .HasOne<GoodsReceipt>()
-        .WithMany()
+        .HasOne(gd => gd.GoodsReceipt)
+        .WithMany(g => g.GoodsReceiptDetails)
         .HasForeignKey(gd => gd.GoodsReceiptId)
         .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<GoodsReceiptDetail>()
-        .HasOne<Product>()
+        .HasOne(gd => gd.Product)
         .WithMany()
         .HasForeignKey(gd => gd.ProductId)
         .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<Product>()
-        .HasOne<Category>()
+        .HasOne(p => p.Category)
         .WithMany()
         .HasForeignKey(p => p.CategoryId)
         .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<Inventory>()
-        .HasOne<Product>()
+        .HasOne(i => i.Product)
         .WithOne()
         .HasForeignKey<Inventory>(i => i.ProductId)
         .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<Order>()
-        .HasOne<User>()
+        .HasOne(o => o.User)
         .WithMany()
         .HasForeignKey(o => o.UserId)
         .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<Order>()
-        .HasOne<Customer>()
+        .HasOne(o => o.Customer)
         .WithMany()
         .HasForeignKey(o => o.CustomerId)
         .OnDelete(DeleteBehavior.Restrict);
@@ -167,7 +195,7 @@ public class ApplicationDbContext : DbContext
         .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<OrderDetail>()
-        .HasOne<Product>()
+        .HasOne(od => od.Product)
         .WithMany()
         .HasForeignKey(od => od.ProductId)
         .OnDelete(DeleteBehavior.Restrict);

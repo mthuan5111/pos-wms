@@ -7,6 +7,7 @@ import CustomInput from '@/components/CustomInput';
 import CustomButton from '@/components/CustomButton';
 import { useAuthStore } from '@/store/authStore';
 import apiClient from '@/services/apiClient';
+import { pullMasterData } from '@/database/db';
 
 const loginSchema = z.object({
     username: z.string().min(1, 'Tên đăng nhập không được để trống'),
@@ -36,28 +37,44 @@ export default function LoginScreen() {
         setIsLoading(true);
         setApiError(null);
         try {
-            console.log("1. Đang gửi Request đăng nhập...");
+            console.log("[Auth] Đang gửi Request đăng nhập...");
             const response = await apiClient.post('/Auth/login', {
                 username: data.username,
                 password: data.password,
             });
             const result = response.data;
-            console.log("2. Nhận kết quả từ Backend:", result);
             if (result.isSuccess) {
                 const { accessToken, refreshToken, ...userInfo } = result.data;
-                console.log("3. Thông tin User bóc tách được:", userInfo);
+                console.log("[Auth] Đăng nhập thành công, lưu Token vào Store...");
                 await setAuthAsync( userInfo, accessToken, refreshToken);
-                console.log("4. Lưu Store thành công! Đang chờ Navigation tự chuyển...");
+                console.log("[DB] Lưu Store thành công! Đang tiến hành đồng bộ dữ liệu...");
+                try {
+                    await pullMasterData();
+                    console.log("[DB] Đồng bộ dữ liệu thành công! Đang chờ Navigation tự chuyển...");
+                } catch (e) {
+                    console.error("Lỗi đồng bộ dữ liệu ban đầu:", e);
+                    // Vẫn cho đăng nhập nhưng báo lỗi
+                    Alert.alert("Cảnh báo", "Không thể tải dữ liệu mới nhất. Ứng dụng sẽ dùng dữ liệu cũ.");
+                }
             } else {
                 setApiError(result.message || 'Đăng nhập thất bại');
             }
         } catch (error: any) {
-            console.log("🚨 Lỗi Catch:", error);
+            console.error("[Auth] Lỗi Catch:", error.message, error.response?.status ?? "No response");
             if (error.isAxiosError) {
-                setApiError(error.response?.data?.message || 'Lỗi mạng: Không thể kết nối máy chủ');
+                if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+                    setApiError('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
+                } else if (!error.response) {
+                    // This catches Network Error or ERR_CONNECTION_REFUSED
+                    setApiError('Không thể kết nối máy chủ. Vui lòng kiểm tra backend và địa chỉ API.');
+                } else if (error.response.status === 401) {
+                    setApiError('Tên đăng nhập hoặc mật khẩu không đúng.');
+                } else {
+                    setApiError(error.response?.data?.message || 'Lỗi mạng: Không thể kết nối máy chủ');
+                }
             } else {
                 // Nếu không phải lỗi API, đây chính là lỗi Code/Thư viện!
-                setApiError('Lỗi hệ thống (Code/Store): ' + error.message);
+                setApiError('Lỗi hệ thống: ' + error.message);
             }
         } finally {
             setIsLoading(false);
@@ -67,22 +84,40 @@ export default function LoginScreen() {
     return(
         <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            className="flex-1 bg-white justify-center px-6"
+            className="flex-1 bg-white justify-center px-8"
         >
-            <View className='items-center mb-10'>
-                <View className='w-24 h-24 bg-blue-100 rounded-full items-center justify-center mb-4'>
-                    <Text className='text-3xl text-blue-600 font-bold'>POS</Text>
+            {/* Editorial Logo & Title */}
+            <View className='items-center mb-12'>
+                {/* Oversized Masthead */}
+                <Text style={{ fontFamily: 'serif', fontSize: 72, fontWeight: '900', color: '#000', letterSpacing: -3 }}>
+                    POS
+                </Text>
+                {/* Decorative Rule */}
+                <View className="flex-row items-center mt-2 mb-4">
+                    <View style={{ width: 60, height: 4, backgroundColor: '#000' }} />
+                    <View style={{ width: 10, height: 10, borderWidth: 2, borderColor: '#000', marginHorizontal: 8 }} />
+                    <View style={{ width: 60, height: 4, backgroundColor: '#000' }} />
                 </View>
-                <Text className='text-2xl font-bold text-gray-800'>Chào mừng trở lại</Text>
-                <Text className='text-gray-500 mt-2'>Đăng nhập để quản lý hệ thống</Text>
+                {/* Subtitle */}
+                <Text style={{ fontSize: 11, letterSpacing: 6, color: '#525252', textTransform: 'uppercase' }}>
+                    Warehouse Management
+                </Text>
             </View>
+
+            {/* Thick separator */}
+            <View style={{ width: '100%', height: 4, backgroundColor: '#000', marginBottom: 32 }} />
+
+            {/* Error Banner — inverted */}
             {apiError && (
-                <View className='bg-red-50 p-3 rounded-lg mb-4'>
-                    <Text className='text-red-600 text-center font-medium'>{apiError}</Text>
+                <View className='bg-black p-4 mb-6'>
+                    <Text className='text-white text-center font-medium' style={{ fontSize: 13, letterSpacing: 1 }}>
+                        {apiError}
+                    </Text>
                 </View>
             )}
 
-            <View className='space-y-4'>
+            {/* Form */}
+            <View>
                 <Controller
                     control={control}
                     name="username"
@@ -117,13 +152,19 @@ export default function LoginScreen() {
                 />
             </View>
 
-            <View className='mt-8'>
+            {/* Login Button */}
+            <View className='mt-6'>
                 <CustomButton
-                    title={isLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
+                    title={isLoading ? 'Đang đăng nhập...' : 'Đăng nhập →'}
                     onPress={handleSubmit(onSubmit)}
                     disabled={isLoading}
                     loading={isLoading}
                 />
+            </View>
+
+            {/* Bottom decorative element */}
+            <View className="items-center mt-10">
+                <View style={{ width: 24, height: 2, backgroundColor: '#E5E5E5' }} />
             </View>
         </KeyboardAvoidingView>
     )

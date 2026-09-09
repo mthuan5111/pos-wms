@@ -7,4 +7,34 @@ Thumbs.db
 .idea/
 *.swp
 *.log
-*.txt
+
+# Secrets and credentials
+**/.env
+**/.env.*
+**/appsettings.json
+**/appsettings.Development.json
+**/appsettings.Production.json
+**/secrets.json
+**/credentials.json
+*service-account*.json
+
+# Certificates and keys
+*.pfx
+*.p12
+*.pem
+*.key
+*.jks
+*.keystore
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.mdf
+*.ldf
+*.bak
+*.dump
+
+# Generated SQL migration scripts
+backend/MigrationScript.sql
+backend/backend/

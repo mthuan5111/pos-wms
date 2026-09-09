@@ -9,5 +9,8 @@ namespace POS_WMS.Domain.Entities
         public decimal Price { get; set; }
         public bool IsActive { get; set; }
         public string ImageUrl { get; set; } = string.Empty;
+
+        [System.ComponentModel.DataAnnotations.Schema.ForeignKey("CategoryId")]
+        public Category? Category { get; set; }
     }
 }

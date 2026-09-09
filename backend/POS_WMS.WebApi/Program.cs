@@ -19,10 +19,29 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("SafeCORS", policy =>
     {
-        policy.SetIsOriginAllowed(origin => true)
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
+        if (builder.Environment.IsDevelopment())
+        {
+            policy.SetIsOriginAllowed(origin => true)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod();
+        }
+        else
+        {
+            if (allowedOrigins.Length > 0)
+            {
+                policy.WithOrigins(allowedOrigins)
+                      .AllowAnyHeader()
+                      .AllowAnyMethod()
+                      .AllowCredentials();
+            }
+            else
+            {
+                // Fallback for production if no origins specified
+                policy.AllowAnyOrigin()
+                      .AllowAnyHeader()
+                      .AllowAnyMethod();
+            }
+        }
     });
 });
 
@@ -45,6 +64,11 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<IInventoryService, InventoryService>();
+builder.Services.AddScoped<IGoodsReceiptService, GoodsReceiptService>();
+builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<IAuditLogService, AuditLogService>();
+builder.Services.AddScoped<IStockMovementService, StockMovementService>();
 
 builder.Services.AddAuthentication(options =>
 {
@@ -85,6 +109,7 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles();
 app.UseCors("SafeCORS");
+app.UseMiddleware<POS_WMS.WebApi.Middlewares.GlobalExceptionMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -95,7 +120,10 @@ using (var scope = app.Services.CreateScope())
     var services = scope.ServiceProvider;
     try
     {
-        await POS_WMS.Infrastructure.Persistence.DatabaseSeeder.SeedDataAsync(services);
+        if (app.Environment.IsDevelopment())
+        {
+            await POS_WMS.Infrastructure.Persistence.DatabaseSeeder.SeedDataAsync(services);
+        }
     }
     catch (Exception ex)
     {

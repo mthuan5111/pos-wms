@@ -3,6 +3,7 @@ import { saveTokens, clearTokens } from "@/utils/token";
 import * as SecureStore from 'expo-secure-store';
 
 interface User {
+    id: number;
     username: string;
     name: string;
     role: string;
@@ -32,7 +33,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         try{
             await clearTokens();
         } catch(error){
-            console.error('Error occurred while clearing tokens:', error);
+            console.error('[Auth] Error occurred while clearing tokens:', error);
         } finally {
             set({ user: null, token: null, isAuthenticated: false });
         }

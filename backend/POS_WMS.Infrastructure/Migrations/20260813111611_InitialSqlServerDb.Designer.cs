@@ -12,15 +12,15 @@ using POS_WMS.Infrastructure.Persistence;
 namespace POS_WMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260711094028_AddImageUrlToProduct_Table")]
-    partial class AddImageUrlToProduct_Table
+    [Migration("20260813111611_InitialSqlServerDb")]
+    partial class InitialSqlServerDb
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -75,14 +75,6 @@ namespace POS_WMS.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Customers");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Name = "Khách vãng lai",
-                            Phone = "0000000000"
-                        });
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
@@ -355,13 +347,19 @@ namespace POS_WMS.Infrastructure.Migrations
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)");
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<string>("Phone")
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("RefreshToken")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Role")
                         .IsRequired()
@@ -378,18 +376,6 @@ namespace POS_WMS.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            IsActive = true,
-                            Name = "Administrator",
-                            PasswordHash = "123456",
-                            Phone = "0999999999",
-                            Role = "Admin",
-                            Username = "admin"
-                        });
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.GoodsReceipt", b =>
@@ -448,8 +434,8 @@ namespace POS_WMS.Infrastructure.Migrations
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.OrderDetail", b =>
                 {
-                    b.HasOne("POS_WMS.Domain.Entities.Order", null)
-                        .WithMany()
+                    b.HasOne("POS_WMS.Domain.Entities.Order", "Order")
+                        .WithMany("OrderDetails")
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -459,6 +445,8 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasForeignKey("ProductId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Order");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.Product", b =>
@@ -468,6 +456,11 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("POS_WMS.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderDetails");
                 });
 #pragma warning restore 612, 618
         }

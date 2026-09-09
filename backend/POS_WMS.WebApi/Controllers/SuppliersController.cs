@@ -11,7 +11,7 @@ using POS_WMS.WebApi.Common;
 namespace POS_WMS.WebApi.Controllers
 {
     [ApiController]
-    [Route("/[controller]")]
+    [Route("api/[controller]")]
     [Authorize(Roles = "Admin,Manager,WarehouseStaff")]
     public class SuppliersController : ControllerBase
     {
