@@ -36,6 +36,8 @@ public class ApplicationDbContext : DbContext
         {
             entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.Code).HasMaxLength(50);
+            entity.HasIndex(e => e.Code).IsUnique().HasFilter("[Code] IS NOT NULL");
         });
 
         modelBuilder.Entity<Customer>(entity =>

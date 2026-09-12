@@ -39,8 +39,8 @@ namespace POS_WMS.Infrastructure.Services
                 SupplierName = g.Supplier?.Name ?? "Unknown",
                 UserId = g.UserId,
                 UserName = g.User?.Username ?? "Unknown",
-                ReceiptDate = g.ReceiptDate,
                 TotalAmount = g.TotalAmount,
+                ReceiptDate = g.ReceiptDate,
                 Remarks = g.Remarks ?? string.Empty
             }).ToList();
         }
@@ -63,8 +63,8 @@ namespace POS_WMS.Infrastructure.Services
                 SupplierName = receipt.Supplier?.Name ?? "Unknown",
                 UserId = receipt.UserId,
                 UserName = receipt.User?.Username ?? "Unknown",
-                ReceiptDate = receipt.ReceiptDate,
                 TotalAmount = receipt.TotalAmount,
+                ReceiptDate = receipt.ReceiptDate,
                 Remarks = receipt.Remarks ?? string.Empty,
                 Details = receipt.GoodsReceiptDetails.Select(d => new GoodsReceiptDetailDto
                 {
@@ -84,8 +84,8 @@ namespace POS_WMS.Infrastructure.Services
             {
                 var receipt = new GoodsReceipt
                 {
-                    SupplierId = request.SupplierId,
                     UserId = request.UserId,
+                    SupplierId = request.SupplierId,
                     ReceiptDate = DateTime.UtcNow,
                     Remarks = request.Remarks,
                     TotalAmount = request.Details.Sum(d => d.Quantity * d.CostPrice)
@@ -117,12 +117,10 @@ namespace POS_WMS.Infrastructure.Services
                     else
                     {
                         inventoryItem.StockQuantity += detail.Quantity;
-                        _context.Inventories.Update(inventoryItem);
                     }
 
                     await _context.SaveChangesAsync();
 
-                    // Record stock movement
                     await _stockMovementService.RecordMovementAsync(
                         detail.ProductId,
                         StockMovementType.In,
@@ -134,7 +132,6 @@ namespace POS_WMS.Infrastructure.Services
                     );
                 }
 
-                await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
                 // Audit log
@@ -142,7 +139,7 @@ namespace POS_WMS.Infrastructure.Services
                 await _auditLogService.LogActionAsync(
                     request.UserId,
                     user?.Username ?? "Unknown",
-                    "RECEIPT",
+                    "IMPORT",
                     "GoodsReceipt",
                     receipt.Id.ToString(),
                     $"Nhập kho: {receipt.TotalAmount:N0}đ ({request.Details.Count} sản phẩm)"
@@ -162,13 +159,19 @@ namespace POS_WMS.Infrastructure.Services
             if (string.IsNullOrEmpty(request.OfflineReferenceId))
                 throw new ArgumentException("Thiếu mã OfflineReferenceId");
 
+            var existingReceiptPreCheck = await _context.GoodsReceipts.FirstOrDefaultAsync(r => r.OfflineReferenceId == request.OfflineReferenceId);
+            if (existingReceiptPreCheck != null)
+            {
+                return existingReceiptPreCheck.Id;
+            }
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var receipt = new GoodsReceipt
                 {
-                    SupplierId = request.SupplierId,
                     UserId = request.UserId,
+                    SupplierId = request.SupplierId,
                     ReceiptDate = DateTime.UtcNow,
                     Remarks = request.Remarks,
                     TotalAmount = request.Details.Sum(d => d.Quantity * d.CostPrice),
@@ -201,12 +204,12 @@ namespace POS_WMS.Infrastructure.Services
                     else
                     {
                         inventoryItem.StockQuantity += detail.Quantity;
-                        _context.Inventories.Update(inventoryItem);
                     }
-
+                    
                     await _context.SaveChangesAsync();
 
                     var userName = await _context.Users.Where(u => u.Id == request.UserId).Select(u => u.Username).FirstOrDefaultAsync() ?? "Unknown";
+
                     await _stockMovementService.RecordMovementAsync(
                         detail.ProductId,
                         StockMovementType.In,
@@ -218,14 +221,13 @@ namespace POS_WMS.Infrastructure.Services
                     );
                 }
 
-                await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
                 var user = await _context.Users.FindAsync(request.UserId);
                 await _auditLogService.LogActionAsync(
                     request.UserId,
                     user?.Username ?? "Unknown",
-                    "RECEIPT_SYNC",
+                    "IMPORT",
                     "GoodsReceipt",
                     receipt.Id.ToString(),
                     $"Đồng bộ phiếu nhập: {receipt.TotalAmount:N0}đ ({request.Details.Count} sản phẩm)"

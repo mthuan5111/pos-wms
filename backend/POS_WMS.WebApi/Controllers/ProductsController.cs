@@ -23,12 +23,14 @@ namespace POS_WMS.WebApi.Controllers
     public class ProductsController : ControllerBase
     {
         private readonly IGenericRepository<Product> _productRepository;
+        private readonly IGenericRepository<Category> _categoryRepository;
         private readonly IUnitOfWork _unitOfWork;
         private readonly IConfiguration _config;
 
-        public ProductsController(IGenericRepository<Product> productRepository, IUnitOfWork unitOfWork, IConfiguration config)
+        public ProductsController(IGenericRepository<Product> productRepository, IGenericRepository<Category> categoryRepository, IUnitOfWork unitOfWork, IConfiguration config)
         {
             _productRepository = productRepository;
+            _categoryRepository = categoryRepository;
             _unitOfWork = unitOfWork;
             _config = config;
         }
@@ -128,9 +130,37 @@ namespace POS_WMS.WebApi.Controllers
         {
             try
             {
+                int assignedCategoryId = 0;
+                if (request.CategoryId.HasValue)
+                {
+                    assignedCategoryId = request.CategoryId.Value;
+                }
+                else
+                {
+                    var categories = await _categoryRepository.GetAllAsync();
+                    var sysCat = categories.FirstOrDefault(c => c.Code == "UNCATEGORIZED" && c.IsSystem);
+                    if (sysCat == null)
+                    {
+                        try
+                        {
+                            sysCat = new Category { Name = "CHƯA PHÂN LOẠI", Code = "UNCATEGORIZED", IsSystem = true, Description = "System fallback category" };
+                            await _categoryRepository.AddAsync(sysCat);
+                            await _unitOfWork.SaveChangesAsync();
+                        }
+                        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+                        {
+                            // Race condition: another thread created it
+                            categories = await _categoryRepository.GetAllAsync();
+                            sysCat = categories.FirstOrDefault(c => c.Code == "UNCATEGORIZED" && c.IsSystem);
+                            if (sysCat == null) throw new Exception("Không thể tạo hoặc tìm thấy danh mục hệ thống.");
+                        }
+                    }
+                    assignedCategoryId = sysCat.Id;
+                }
+
                 var product = new Product
                 {
-                    CategoryId = request.CategoryId,
+                    CategoryId = assignedCategoryId,
                     Name = request.Name,
                     Barcode = request.Barcode,
                     Price = request.Price,
@@ -155,11 +185,34 @@ namespace POS_WMS.WebApi.Controllers
             {
                 var product = await _productRepository.GetByIdAsync(id);
                 if (product == null)
+                    return NotFound(ApiResponse<bool>.Failure("KhA'ng tAm thy sn phcm"));
+
+                if (request.CategoryId.HasValue)
                 {
-                    return NotFound(ApiResponse<bool>.Failure("Không tìm thấy sản phẩm để cập nhật", "ERR_NOT_FOUND"));
+                    product.CategoryId = request.CategoryId.Value;
+                }
+                else
+                {
+                    var categories = await _categoryRepository.GetAllAsync();
+                    var sysCat = categories.FirstOrDefault(c => c.Code == "UNCATEGORIZED" && c.IsSystem);
+                    if (sysCat == null)
+                    {
+                        try
+                        {
+                            sysCat = new Category { Name = "CHƯA PHÂN LOẠI", Code = "UNCATEGORIZED", IsSystem = true, Description = "System fallback category" };
+                            await _categoryRepository.AddAsync(sysCat);
+                            await _unitOfWork.SaveChangesAsync();
+                        }
+                        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+                        {
+                            categories = await _categoryRepository.GetAllAsync();
+                            sysCat = categories.FirstOrDefault(c => c.Code == "UNCATEGORIZED" && c.IsSystem);
+                            if (sysCat == null) throw new Exception("Không thể tạo hoặc tìm thấy danh mục hệ thống.");
+                        }
+                    }
+                    product.CategoryId = sysCat.Id;
                 }
 
-                product.CategoryId = request.CategoryId;
                 product.Name = request.Name;
                 product.Barcode = request.Barcode;
                 product.Price = request.Price;
@@ -168,12 +221,11 @@ namespace POS_WMS.WebApi.Controllers
 
                 _productRepository.Update(product);
                 await _unitOfWork.SaveChangesAsync();
-
                 return Ok(ApiResponse<bool>.Success(true, "Cập nhật thành công"));
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure("$Lỗi hệ thống: {ex.Message}", "ERR_UPDATE"));
+                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
             }
         }
 
