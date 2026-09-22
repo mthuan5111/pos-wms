@@ -1,5 +1,6 @@
+import { useModalStore } from '@/store/useModalStore';
 import React, { useState } from 'react';
-import { View, Text, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -32,7 +33,7 @@ export default function LoginScreen() {
             password: '',
         },
     });
-    
+
     const onSubmit = async (data: LoginFormData) => {
         setIsLoading(true);
         setApiError(null);
@@ -47,20 +48,16 @@ export default function LoginScreen() {
                 const { accessToken, refreshToken, ...userInfo } = result.data;
                 console.log("[Auth] Đăng nhập thành công, lưu Token vào Store...");
                 await setAuthAsync( userInfo, accessToken, refreshToken);
-                console.log("[DB] Lưu Store thành công! Đang tiến hành đồng bộ dữ liệu...");
-                try {
-                    await pullMasterData();
-                    console.log("[DB] Đồng bộ dữ liệu thành công! Đang chờ Navigation tự chuyển...");
-                } catch (e) {
-                    console.error("Lỗi đồng bộ dữ liệu ban đầu:", e);
-                    // Vẫn cho đăng nhập nhưng báo lỗi
-                    Alert.alert("Cảnh báo", "Không thể tải dữ liệu mới nhất. Ứng dụng sẽ dùng dữ liệu cũ.");
-                }
+                // Sau khi lưu token, RootNavigator sẽ tự động switch sang BootstrapScreen
             } else {
                 setApiError(result.message || 'Đăng nhập thất bại');
             }
         } catch (error: any) {
-            console.error("[Auth] Lỗi Catch:", error.message, error.response?.status ?? "No response");
+            if (error?.response?.status === 401) {
+                console.warn("[Auth] Đăng nhập thất bại: Tài khoản hoặc mật khẩu không chính xác.");
+            } else {
+                console.error("[Auth] Lỗi Catch:", error.message, error.response?.status ?? "No response");
+            }
             if (error.isAxiosError) {
                 if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
                     setApiError('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
@@ -81,91 +78,99 @@ export default function LoginScreen() {
         }
     };
 
-    return(
+    return (
         <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            className="flex-1 bg-white justify-center px-8"
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            className="flex-1 bg-white"
         >
-            {/* Editorial Logo & Title */}
-            <View className='items-center mb-12'>
-                {/* Oversized Masthead */}
-                <Text style={{ fontFamily: 'serif', fontSize: 72, fontWeight: '900', color: '#000', letterSpacing: -3 }}>
-                    POS
-                </Text>
-                {/* Decorative Rule */}
-                <View className="flex-row items-center mt-2 mb-4">
-                    <View style={{ width: 60, height: 4, backgroundColor: '#000' }} />
-                    <View style={{ width: 10, height: 10, borderWidth: 2, borderColor: '#000', marginHorizontal: 8 }} />
-                    <View style={{ width: 60, height: 4, backgroundColor: '#000' }} />
-                </View>
-                {/* Subtitle */}
-                <Text style={{ fontSize: 11, letterSpacing: 6, color: '#525252', textTransform: 'uppercase' }}>
-                    Warehouse Management
-                </Text>
-            </View>
+            <ScrollView
+                contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 32 }}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+            >
+                <View className="w-full max-w-md self-center">
+                    {/* Editorial Logo & Title */}
+                    <View className='items-center mb-8'>
+                        {/* Oversized Masthead */}
+                        <Text style={{ fontFamily: 'serif', fontSize: 56, fontWeight: '900', color: '#000', letterSpacing: -2 }}>
+                            POS
+                        </Text>
+                        {/* Decorative Rule */}
+                        <View className="flex-row items-center mt-1 mb-3">
+                            <View style={{ width: 48, height: 3, backgroundColor: '#000' }} />
+                            <View style={{ width: 8, height: 8, borderWidth: 2, borderColor: '#000', marginHorizontal: 6 }} />
+                            <View style={{ width: 48, height: 3, backgroundColor: '#000' }} />
+                        </View>
+                        {/* Subtitle */}
+                        <Text style={{ fontSize: 10, letterSpacing: 4, color: '#525252', textTransform: 'uppercase' }}>
+                            Warehouse Management
+                        </Text>
+                    </View>
 
-            {/* Thick separator */}
-            <View style={{ width: '100%', height: 4, backgroundColor: '#000', marginBottom: 32 }} />
+                    {/* Thick separator */}
+                    <View style={{ width: '100%', height: 3, backgroundColor: '#000', marginBottom: 24 }} />
 
-            {/* Error Banner — inverted */}
-            {apiError && (
-                <View className='bg-black p-4 mb-6'>
-                    <Text className='text-white text-center font-medium' style={{ fontSize: 13, letterSpacing: 1 }}>
-                        {apiError}
-                    </Text>
-                </View>
-            )}
-
-            {/* Form */}
-            <View>
-                <Controller
-                    control={control}
-                    name="username"
-                    render={({ field: { onChange, onBlur, value}}) => (
-                        <CustomInput
-                            label='Tên đăng nhập'
-                            placeholder='Nhập tên đăng nhập'
-                            value={value}
-                            onChangeText={onChange}
-                            onBlur={onBlur}
-                            error={errors.username?.message}
-                            autoCapitalize='none'
-                        />
+                    {/* Error Banner — inverted */}
+                    {apiError && (
+                        <View className='bg-black p-3.5 mb-5'>
+                            <Text className='text-white text-center font-medium' style={{ fontSize: 13, letterSpacing: 0.5 }}>
+                                {apiError}
+                            </Text>
+                        </View>
                     )}
-                />
 
-                <Controller
-                    control={control}
-                    name="password"
-                    render={({ field: { onChange, onBlur, value}}) => (
-                        <CustomInput
-                            label='Mật khẩu'
-                            placeholder='Nhập mật khẩu'
-                            value={value}
-                            onChangeText={onChange}
-                            onBlur={onBlur}
-                            error={errors.password?.message}
-                            autoCapitalize='none'
-                            secureTextEntry
+                    {/* Form */}
+                    <View>
+                        <Controller
+                            control={control}
+                            name="username"
+                            render={({ field: { onChange, onBlur, value}}) => (
+                                <CustomInput
+                                    label='Tên đăng nhập *'
+                                    value={value}
+                                    onChangeText={onChange}
+                                    onBlur={onBlur}
+                                    error={errors.username?.message}
+                                    autoCapitalize='none'
+                                    autoComplete="username"
+                                />
+                            )}
                         />
-                    )}
-                />
-            </View>
 
-            {/* Login Button */}
-            <View className='mt-6'>
-                <CustomButton
-                    title={isLoading ? 'Đang đăng nhập...' : 'Đăng nhập →'}
-                    onPress={handleSubmit(onSubmit)}
-                    disabled={isLoading}
-                    loading={isLoading}
-                />
-            </View>
+                        <Controller
+                            control={control}
+                            name="password"
+                            render={({ field: { onChange, onBlur, value}}) => (
+                                <CustomInput
+                                    label='Mật khẩu *'
+                                    value={value}
+                                    onChangeText={onChange}
+                                    onBlur={onBlur}
+                                    error={errors.password?.message}
+                                    autoCapitalize='none'
+                                    autoComplete="current-password"
+                                    secureTextEntry
+                                />
+                            )}
+                        />
+                    </View>
 
-            {/* Bottom decorative element */}
-            <View className="items-center mt-10">
-                <View style={{ width: 24, height: 2, backgroundColor: '#E5E5E5' }} />
-            </View>
+                    {/* Login Button */}
+                    <View className='mt-6'>
+                        <CustomButton
+                            title={isLoading ? 'Đang đăng nhập...' : 'Đăng nhập →'}
+                            onPress={handleSubmit(onSubmit)}
+                            disabled={isLoading}
+                            loading={isLoading}
+                        />
+                    </View>
+
+                    {/* Bottom decorative element */}
+                    <View className="items-center mt-8">
+                        <View style={{ width: 24, height: 2, backgroundColor: '#E5E5E5' }} />
+                    </View>
+                </View>
+            </ScrollView>
         </KeyboardAvoidingView>
-    )
+    );
 }

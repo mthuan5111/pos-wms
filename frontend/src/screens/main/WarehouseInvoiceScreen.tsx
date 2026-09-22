@@ -5,8 +5,20 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { getServerReceipts } from "@/services/goodsReceiptApi";
 
+export interface ServerGoodsReceiptDto {
+  id: number;
+  offlineReferenceId: string | null;
+  totalAmount: number;
+  createdAt: string;
+  userId: number | null;
+  user: { name: string } | null;
+  supplier: { name: string } | null;
+  remarks?: string;
+  details?: Array<{ productId: number; productName: string; quantity: number; costPrice: number }>;
+}
+
 export default function WarehouseInvoiceScreen() {
-  const [receipts, setReceipts] = useState<any[]>([]);
+  const [receipts, setReceipts] = useState<ServerGoodsReceiptDto[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const loadServerReceipts = async () => {
@@ -30,7 +42,7 @@ export default function WarehouseInvoiceScreen() {
   );
 
   const formatCurrency = (amount: number) => amount.toLocaleString("vi-VN") + " đ";
-  
+
   const formatDate = (isoStr: string) => {
       try {
           const d = new Date(isoStr);
@@ -42,18 +54,18 @@ export default function WarehouseInvoiceScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-white">
-      <View className="px-6 pt-5 pb-4 bg-white border-b-4 border-black mb-4">
-        <View className="flex-row justify-between items-center mb-4">
+      <View className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3 bg-white border-b-4 border-black mb-4">
+        <View className="flex-row justify-between items-center mb-1">
           <View>
-            <Text style={{ fontFamily: 'serif', fontSize: 36, fontWeight: '900', color: '#000', letterSpacing: -1, textTransform: 'uppercase' }}>
+            <Text className="font-serif text-2xl sm:text-3xl font-black text-black tracking-tight uppercase">
               Lịch sử nhập
             </Text>
-            <Text className="mt-1" style={{ fontSize: 11, letterSpacing: 4, color: '#525252', textTransform: 'uppercase' }}>
+            <Text className="mt-0.5 text-[10px] sm:text-[11px] tracking-widest text-neutral-600 uppercase">
               Đã đồng bộ lên máy chủ
             </Text>
           </View>
-          <View className="w-12 h-12 border-2 border-black items-center justify-center">
-            <Ionicons name="cloud-done-outline" size={24} color="#000" />
+          <View className="w-11 h-11 border-2 border-black items-center justify-center">
+            <Ionicons name="cloud-done-outline" size={22} color="#000" />
           </View>
         </View>
       </View>
@@ -62,7 +74,7 @@ export default function WarehouseInvoiceScreen() {
         data={receipts}
         keyExtractor={(item) => item.id.toString()}
         refreshControl={<RefreshControl refreshing={isLoading} onRefresh={loadServerReceipts} />}
-        contentContainerStyle={{ padding: 16 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <View className="bg-white p-4 mb-4 border-2 border-black">
@@ -88,7 +100,7 @@ export default function WarehouseInvoiceScreen() {
                     <Text className="text-black ml-2 flex-1 italic">{item.remarks}</Text>
                 </View>
             )}
-            
+
             {item.details && item.details.length > 0 && (
                 <View className="mt-4 pt-2 border-t-2 border-dashed border-gray-300">
                     <Text className="font-bold text-black mb-2 text-xs uppercase" style={{ letterSpacing: 1 }}>Chi tiết ({item.details.length} sản phẩm)</Text>

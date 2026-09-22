@@ -10,6 +10,7 @@ namespace POS_WMS.Application.DTOs
         public int Id { get; set; }
         public int ProductId { get; set; }
         public string ProductName { get; set; } = string.Empty;
+        public string Barcode { get; set; } = string.Empty;
         public int Quantity { get; set; }
         public decimal UnitPrice { get; set; }
     }
@@ -23,6 +24,7 @@ namespace POS_WMS.Application.DTOs
         public decimal TotalAmount { get; set; }
         public DateTime OrderDate { get; set; }
         public OrderStatus Status { get; set; }
+        public string PaymentMethod { get; set; } = "CASH";
         public string OfflineReferenceId { get; set; } = string.Empty;
 
         public List<OrderDetailDto> Details { get; set; } = new List<OrderDetailDto>();

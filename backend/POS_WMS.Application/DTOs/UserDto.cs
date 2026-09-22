@@ -8,6 +8,8 @@ namespace POS_WMS.Application.DTOs
         public string Role { get; set; } = string.Empty;
         public string Phone { get; set; } = string.Empty;
         public bool IsActive { get; set; }
+        public bool IsSystemAdmin { get; set; }
+        public bool IsProtected { get; set; }
     }
 
     public class CreateUserRequestDto
@@ -28,6 +30,12 @@ namespace POS_WMS.Application.DTOs
 
     public class ResetPasswordRequestDto
     {
+        public string NewPassword { get; set; } = string.Empty;
+    }
+
+    public class ChangePasswordRequestDto
+    {
+        public string CurrentPassword { get; set; } = string.Empty;
         public string NewPassword { get; set; } = string.Empty;
     }
 }

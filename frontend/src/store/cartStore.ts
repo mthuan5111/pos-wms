@@ -39,16 +39,11 @@ export const useCartStore = create<CartState>((set, get) => ({
       items: state.items.filter((i) => i.productId !== productId),
     })),
   updateQuantity: (productId, quantity) =>
-    set((state) => {
-      if (quantity <= 0) {
-        return { items: state.items.filter((i) => i.productId !== productId) };
-      }
-      return {
-        items: state.items.map((i) =>
-          i.productId === productId ? { ...i, quantity } : i,
-        ),
-      };
-    }),
+    set((state) => ({
+      items: state.items.map((i) =>
+        i.productId === productId ? { ...i, quantity } : i,
+      ),
+    })),
   clearCart: () => set({ items: [] }),
   getTotalPrice: () => {
     return get().items.reduce(
@@ -57,3 +52,7 @@ export const useCartStore = create<CartState>((set, get) => ({
     );
   },
 }));
+
+if (__DEV__ && typeof window !== "undefined") {
+  (window as any).__CART_STORE__ = useCartStore;
+}

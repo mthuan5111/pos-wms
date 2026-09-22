@@ -22,11 +22,24 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetAll()
+        public async Task<IActionResult> GetAll([FromQuery] int? userId = null)
         {
             try
             {
                 var receipts = await _goodsReceiptService.GetAllAsync();
+                var userRole = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+                var currentUserIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                int.TryParse(currentUserIdClaim, out var currentUserId);
+
+                if (string.Equals(userRole, "WarehouseStaff", StringComparison.OrdinalIgnoreCase))
+                {
+                    receipts = receipts.Where(r => r.UserId == currentUserId).ToList();
+                }
+                else if (userId.HasValue && userId.Value > 0)
+                {
+                    receipts = receipts.Where(r => r.UserId == userId.Value).ToList();
+                }
+
                 return Ok(ApiResponse<List<GoodsReceiptDto>>.Success(receipts));
             }
             catch (Exception ex)
@@ -58,9 +71,13 @@ namespace POS_WMS.WebApi.Controllers
         {
             try
             {
-                if (!ModelState.IsValid)
+                if (request.UserId <= 0)
                 {
-                    return BadRequest(ApiResponse<GoodsReceiptDto>.Failure("Dữ liệu đầu vào không hợp lệ"));
+                    var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                    if (int.TryParse(userIdClaim, out var claimUserId))
+                    {
+                        request.UserId = claimUserId;
+                    }
                 }
 
                 var receipt = await _goodsReceiptService.CreateAsync(request);
@@ -72,7 +89,8 @@ namespace POS_WMS.WebApi.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<GoodsReceiptDto>.Failure($"Lỗi tạo phiếu nhập: {ex.Message}"));
+                var msg = ex.InnerException != null ? $"{ex.Message} --> {ex.InnerException.Message}" : ex.Message;
+                return StatusCode(500, ApiResponse<GoodsReceiptDto>.Failure($"Lỗi tạo phiếu nhập: {msg}"));
             }
         }
 

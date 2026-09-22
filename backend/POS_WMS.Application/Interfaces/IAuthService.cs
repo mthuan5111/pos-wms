@@ -7,5 +7,6 @@ namespace POS_WMS.Application.Interfaces
     {
         Task<AuthResponseDTO?> LoginAsync(LoginRequestDTO request);
         Task<AuthResponseDTO?> RefreshTokenAsync(TokenRequestDTO request);
+        Task LogoutAsync(int userId, string username);
     }
 }

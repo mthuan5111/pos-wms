@@ -1,5 +1,5 @@
-import React, { useEffect } from "react";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import React from "react";
+import { createBottomTabNavigator, BottomTabBar } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import { MainTabParamList } from "@/types/navigation";
 import PosScreen from "@/screens/main/PosScreen";
@@ -7,85 +7,42 @@ import InventoryScreen from "@/screens/main/InventoryScreen";
 import InvoiceScreen from "@/screens/main/InvoiceScreen";
 import SettingsScreen from "@/screens/main/SettingsScreen";
 import DashboardScreen from "@/screens/main/DashboardScreen";
-import CashierSettingsScreen from "@/screens/main/CashierSettingsScreen";
-import WarehouseSettingsScreen from "@/screens/main/WarehouseSettingsScreen";
+import StatisticsScreen from "@/screens/main/StatisticsScreen";
 import UserManagementScreen from "@/screens/main/UserManagementScreen";
 import SystemLogScreen from "@/screens/main/SystemLogScreen";
+import DesktopSidebar from "@/components/DesktopSidebar";
+import MobileBottomTabBar from "@/components/MobileBottomTabBar";
 import { useAuthStore } from "@/store/authStore";
-import NetInfo from "@react-native-community/netinfo";
-import { useSync } from "@/hooks/useSync";
-import { useSyncReceipts } from "@/hooks/useSyncReceipts";
-import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
-import { Platform, Alert, AppState } from "react-native";
+import { useSyncCoordinator } from "@/hooks/useSyncCoordinator";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 export default function MainNavigator() {
   const user = useAuthStore(state => state.user);
   const role = user?.role || "";
-  const { syncOrders } = useSync();
-  const { syncReceipts } = useSyncReceipts();
-  const { rerunRequested, clearRerunRequested } = useGlobalSyncStore();
+  const isDesktop = useIsDesktop();
 
-  // Trigger sync if requested
-  useEffect(() => {
-    if (rerunRequested) {
-        clearRerunRequested();
-        if (role === "Cashier" || role === "Manager") {
-            syncOrders();
-        }
-        if (role === "WarehouseStaff" || role === "Manager") {
-            syncReceipts();
-        }
-    }
-  }, [rerunRequested, role, syncOrders, syncReceipts, clearRerunRequested]);
-
-  // Sync on network connection
-  useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener(state => {
-      if (state.isConnected && state.isInternetReachable !== false) {
-          useGlobalSyncStore.getState().requestSync();
-      }
-    });
-
-    return () => {
-        unsubscribe();
-    };
-  }, []);
-
-  // Sync on app foreground
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", nextAppState => {
-      if (nextAppState === "active") {
-        useGlobalSyncStore.getState().requestSync();
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, []);
+  useSyncCoordinator();
 
   const canViewDashboard = role === "Admin" || role === "Manager";
   const canViewPOS = role === "Admin" || role === "Manager" || role === "Cashier";
   const canViewInventory = role === "Admin" || role === "Manager" || role === "WarehouseStaff";
   const canViewInvoice = role === "Admin" || role === "Manager" || role === "Cashier" || role === "WarehouseStaff";
-  
-  const canViewAdminSettings = role === "Admin" || role === "Manager";
-  const canViewCashierSettings = role === "Cashier";
-  const canViewWarehouseSettings = role === "WarehouseStaff";
-
+  const canViewStatistics = true; // All authenticated roles have role-scoped Statistics
   const canViewUserManagement = role === "Admin";
   const canViewSystemLog = role === "Admin";
 
   return (
     <Tab.Navigator
+      tabBar={props => isDesktop ? <DesktopSidebar {...props} /> : <MobileBottomTabBar {...props} />}
       screenOptions={({ route }) => ({
+        sceneStyle: isDesktop ? { marginLeft: 240 } : { marginLeft: 0 },
         headerShown: false,
         headerTitleStyle: { fontWeight: "bold" },
         tabBarActiveTintColor: "#000000",
         tabBarInactiveTintColor: "#525252",
-        tabBarStyle: {
+        tabBarStyle: isDesktop ? { display: 'none' } : {
           height: 64,
           paddingBottom: 8,
           paddingTop: 8,
@@ -112,6 +69,8 @@ export default function MainNavigator() {
             iconName = focused ? "cube" : "cube-outline";
           } else if (route.name === "Invoice" || route.name === "WarehouseInvoice") {
             iconName = focused ? "receipt" : "receipt-outline";
+          } else if (route.name === "Statistics") {
+            iconName = focused ? "stats-chart" : "stats-chart-outline";
           } else if (route.name === "Settings" || route.name === "CashierSettings" || route.name === "WarehouseSettings") {
             iconName = focused ? "settings" : "settings-outline";
           } else if (route.name === "UserManagement") {
@@ -165,27 +124,18 @@ export default function MainNavigator() {
           options={{ tabBarLabel: "Hóa đơn" }}
         />
       )}
-      {canViewAdminSettings && (
+      {canViewStatistics && (
         <Tab.Screen
-          name="Settings"
-          component={SettingsScreen}
-          options={{ tabBarLabel: "Cài đặt" }}
+          name="Statistics"
+          component={StatisticsScreen}
+          options={{ tabBarLabel: "Thống kê" }}
         />
       )}
-      {canViewCashierSettings && (
-        <Tab.Screen
-          name="CashierSettings"
-          component={CashierSettingsScreen}
-          options={{ tabBarLabel: "Cài đặt" }}
-        />
-      )}
-      {canViewWarehouseSettings && (
-        <Tab.Screen
-          name="WarehouseSettings"
-          component={WarehouseSettingsScreen}
-          options={{ tabBarLabel: "Cài đặt" }}
-        />
-      )}
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{ tabBarLabel: "Cài đặt" }}
+      />
     </Tab.Navigator>
   );
 }

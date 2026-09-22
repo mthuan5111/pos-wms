@@ -29,6 +29,8 @@ namespace POS_WMS.Infrastructure.Services
             var receipts = await _context.GoodsReceipts
                 .Include(g => g.Supplier)
                 .Include(g => g.User)
+                .Include(g => g.GoodsReceiptDetails)
+                .ThenInclude(d => d.Product)
                 .OrderByDescending(g => g.ReceiptDate)
                 .ToListAsync();
 
@@ -41,7 +43,20 @@ namespace POS_WMS.Infrastructure.Services
                 UserName = g.User?.Username ?? "Unknown",
                 TotalAmount = g.TotalAmount,
                 ReceiptDate = g.ReceiptDate,
-                Remarks = g.Remarks ?? string.Empty
+                Remarks = g.Remarks ?? string.Empty,
+                OfflineReferenceId = g.OfflineReferenceId,
+                SyncStatus = "Synced",
+                Status = "COMPLETED",
+                ShiftId = g.ShiftId,
+                Details = g.GoodsReceiptDetails.Select(d => new GoodsReceiptDetailDto
+                {
+                    Id = d.Id,
+                    ProductId = d.ProductId,
+                    ProductName = !string.IsNullOrEmpty(d.ProductName) ? d.ProductName : (d.Product?.Name ?? $"SP #{d.ProductId}"),
+                    Barcode = !string.IsNullOrEmpty(d.Barcode) ? d.Barcode : (d.Product?.Barcode ?? string.Empty),
+                    Quantity = d.Quantity,
+                    CostPrice = d.CostPrice
+                }).ToList()
             }).ToList();
         }
 
@@ -66,11 +81,16 @@ namespace POS_WMS.Infrastructure.Services
                 TotalAmount = receipt.TotalAmount,
                 ReceiptDate = receipt.ReceiptDate,
                 Remarks = receipt.Remarks ?? string.Empty,
+                OfflineReferenceId = receipt.OfflineReferenceId,
+                SyncStatus = "Synced",
+                Status = "COMPLETED",
+                ShiftId = receipt.ShiftId,
                 Details = receipt.GoodsReceiptDetails.Select(d => new GoodsReceiptDetailDto
                 {
                     Id = d.Id,
                     ProductId = d.ProductId,
-                    ProductName = d.Product?.Name ?? "Unknown",
+                    ProductName = !string.IsNullOrEmpty(d.ProductName) ? d.ProductName : (d.Product?.Name ?? $"SP #{d.ProductId}"),
+                    Barcode = !string.IsNullOrEmpty(d.Barcode) ? d.Barcode : (d.Product?.Barcode ?? string.Empty),
                     Quantity = d.Quantity,
                     CostPrice = d.CostPrice
                 }).ToList()
@@ -79,16 +99,37 @@ namespace POS_WMS.Infrastructure.Services
 
         public async Task<GoodsReceiptDto> CreateAsync(CreateGoodsReceiptRequestDto request)
         {
+            if (!string.IsNullOrEmpty(request.OfflineReferenceId))
+            {
+                var existingReceiptPreCheck = await _context.GoodsReceipts.FirstOrDefaultAsync(r => r.OfflineReferenceId == request.OfflineReferenceId);
+                if (existingReceiptPreCheck != null)
+                {
+                    return await GetByIdAsync(existingReceiptPreCheck.Id);
+                }
+            }
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                int effectiveUserId = request.UserId;
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == effectiveUserId);
+                if (user == null)
+                {
+                    user = await _context.Users.FirstOrDefaultAsync(u => u.IsActive);
+                    effectiveUserId = user?.Id ?? 2;
+                }
+
+                var openShift = await _context.Shifts.FirstOrDefaultAsync(s => s.UserId == effectiveUserId && s.Status == ShiftStatus.Open);
+
                 var receipt = new GoodsReceipt
                 {
-                    UserId = request.UserId,
+                    UserId = effectiveUserId,
                     SupplierId = request.SupplierId,
                     ReceiptDate = DateTime.UtcNow,
                     Remarks = request.Remarks,
-                    TotalAmount = request.Details.Sum(d => d.Quantity * d.CostPrice)
+                    TotalAmount = request.Details.Sum(d => d.Quantity * d.CostPrice),
+                    OfflineReferenceId = request.OfflineReferenceId,
+                    ShiftId = request.ShiftId ?? openShift?.Id
                 };
 
                 await _context.GoodsReceipts.AddAsync(receipt);
@@ -96,12 +137,18 @@ namespace POS_WMS.Infrastructure.Services
 
                 foreach (var detail in request.Details)
                 {
+                    var product = await _context.Products.FirstOrDefaultAsync(p => p.Id == detail.ProductId);
+                    var prodName = product?.Name ?? $"SP #{detail.ProductId}";
+                    var prodBarcode = product?.Barcode ?? string.Empty;
+
                     receipt.GoodsReceiptDetails.Add(new GoodsReceiptDetail
                     {
                         GoodsReceiptId = receipt.Id,
                         ProductId = detail.ProductId,
                         Quantity = detail.Quantity,
-                        CostPrice = detail.CostPrice
+                        CostPrice = detail.CostPrice,
+                        ProductName = prodName,
+                        Barcode = prodBarcode
                     });
 
                     var inventoryItem = await _context.Inventories.FirstOrDefaultAsync(i => i.ProductId == detail.ProductId);
@@ -128,16 +175,15 @@ namespace POS_WMS.Infrastructure.Services
                         "GoodsReceipt",
                         receipt.Id,
                         inventoryItem.StockQuantity,
-                        await _context.Users.Where(u => u.Id == request.UserId).Select(u => u.Username).FirstOrDefaultAsync() ?? "Unknown"
+                        user?.Username ?? "Unknown"
                     );
                 }
 
                 await transaction.CommitAsync();
 
                 // Audit log
-                var user = await _context.Users.FindAsync(request.UserId);
                 await _auditLogService.LogActionAsync(
-                    request.UserId,
+                    effectiveUserId,
                     user?.Username ?? "Unknown",
                     "IMPORT",
                     "GoodsReceipt",
@@ -168,14 +214,25 @@ namespace POS_WMS.Infrastructure.Services
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                int effectiveUserId = request.UserId;
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == effectiveUserId);
+                if (user == null)
+                {
+                    user = await _context.Users.FirstOrDefaultAsync(u => u.IsActive);
+                    effectiveUserId = user?.Id ?? 2;
+                }
+
+                var openShift = await _context.Shifts.FirstOrDefaultAsync(s => s.UserId == effectiveUserId && s.Status == ShiftStatus.Open);
+
                 var receipt = new GoodsReceipt
                 {
-                    UserId = request.UserId,
+                    UserId = effectiveUserId,
                     SupplierId = request.SupplierId,
                     ReceiptDate = DateTime.UtcNow,
                     Remarks = request.Remarks,
                     TotalAmount = request.Details.Sum(d => d.Quantity * d.CostPrice),
-                    OfflineReferenceId = request.OfflineReferenceId
+                    OfflineReferenceId = request.OfflineReferenceId,
+                    ShiftId = request.ShiftId ?? openShift?.Id
                 };
 
                 await _context.GoodsReceipts.AddAsync(receipt);
@@ -183,12 +240,18 @@ namespace POS_WMS.Infrastructure.Services
 
                 foreach (var detail in request.Details)
                 {
+                    var product = await _context.Products.FirstOrDefaultAsync(p => p.Id == detail.ProductId);
+                    var prodName = product?.Name ?? $"SP #{detail.ProductId}";
+                    var prodBarcode = product?.Barcode ?? string.Empty;
+
                     receipt.GoodsReceiptDetails.Add(new GoodsReceiptDetail
                     {
                         GoodsReceiptId = receipt.Id,
                         ProductId = detail.ProductId,
                         Quantity = detail.Quantity,
-                        CostPrice = detail.CostPrice
+                        CostPrice = detail.CostPrice,
+                        ProductName = prodName,
+                        Barcode = prodBarcode
                     });
 
                     var inventoryItem = await _context.Inventories.FirstOrDefaultAsync(i => i.ProductId == detail.ProductId);
@@ -205,10 +268,8 @@ namespace POS_WMS.Infrastructure.Services
                     {
                         inventoryItem.StockQuantity += detail.Quantity;
                     }
-                    
-                    await _context.SaveChangesAsync();
 
-                    var userName = await _context.Users.Where(u => u.Id == request.UserId).Select(u => u.Username).FirstOrDefaultAsync() ?? "Unknown";
+                    await _context.SaveChangesAsync();
 
                     await _stockMovementService.RecordMovementAsync(
                         detail.ProductId,
@@ -217,15 +278,14 @@ namespace POS_WMS.Infrastructure.Services
                         "GoodsReceipt",
                         receipt.Id,
                         inventoryItem.StockQuantity,
-                        userName
+                        user?.Username ?? "Unknown"
                     );
                 }
 
                 await transaction.CommitAsync();
 
-                var user = await _context.Users.FindAsync(request.UserId);
                 await _auditLogService.LogActionAsync(
-                    request.UserId,
+                    effectiveUserId,
                     user?.Username ?? "Unknown",
                     "IMPORT",
                     "GoodsReceipt",
@@ -249,7 +309,7 @@ namespace POS_WMS.Infrastructure.Services
                         return existingReceipt.Id; // Idempotent success
                     }
                 }
-                
+
                 throw; // Rethrow to be caught by GlobalExceptionMiddleware
             }
             catch

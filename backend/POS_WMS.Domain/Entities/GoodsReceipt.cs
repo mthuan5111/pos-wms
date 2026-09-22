@@ -11,11 +11,14 @@ namespace POS_WMS.Domain.Entities
         public decimal TotalAmount { get; set; }
         public string? Remarks { get; set; }
         public string? OfflineReferenceId { get; set; }
+        public int? ShiftId { get; set; }
 
         [ForeignKey("SupplierId")]
         public Supplier? Supplier { get; set; }
         [ForeignKey("UserId")]
         public User? User { get; set; }
+        [ForeignKey("ShiftId")]
+        public Shift? Shift { get; set; }
         public ICollection<GoodsReceiptDetail> GoodsReceiptDetails { get; set; } = new List<GoodsReceiptDetail>();
     }
 }

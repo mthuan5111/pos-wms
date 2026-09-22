@@ -1,19 +1,65 @@
 # OS junk files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Editor directories and files
-.vscode/
+# Editor directories and personal configs
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.swp
-*.log
+*.swo
+*~
+*.bak
+
+# Node & Package Managers
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Expo & Mobile builds
+**/.expo/
+web-build/
+dist/
+build/
+.turbo/
+.cache/
+.parcel-cache/
+expo-env.d.ts
+*.tsbuildinfo
+*.apk
+*.aab
+*.ipa
+
+# .NET & Visual Studio build outputs
+**/bin/
+**/obj/
+[Dd]ebug/
+[Rr]elease/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
 
 # Secrets and credentials
 **/.env
 **/.env.*
+!**/.env.example
 **/appsettings.json
 **/appsettings.Development.json
 **/appsettings.Production.json
+!**/appsettings.example.json
 **/secrets.json
 **/credentials.json
 *service-account*.json
@@ -25,15 +71,28 @@ Thumbs.db
 *.key
 *.jks
 *.keystore
+*.cer
+*.crt
+*.der
+*.mobileprovision
 
-# Database files
+# Database local and temporary files
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 *.mdf
 *.ldf
-*.bak
 *.dump
+
+# Logs and test outputs
+*.log
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
 
 # Generated SQL migration scripts
 backend/MigrationScript.sql

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, Modal, TouchableOpacity, TextInput, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import CustomButton from './CustomButton';
@@ -8,12 +8,23 @@ interface CheckoutModalProps {
     onClose: () => void;
     totalAmount: number;
     onConfirm: (paymentMethod: 'CASH' | 'QR', customerGivenAmount: number) => void;
+    isSubmitting?: boolean;
 }
 
-export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm }: CheckoutModalProps) {
+export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm, isSubmitting = false }: CheckoutModalProps) {
     const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'QR'>('CASH');
     const [customerGivenStr, setCustomerGivenStr] = useState('');
-    
+    const [cashError, setCashError] = useState<string | null>(null);
+    const isSubmittingRef = useRef(false);
+
+    useEffect(() => {
+        if (!visible) {
+            isSubmittingRef.current = false;
+            setCashError(null);
+            setCustomerGivenStr('');
+        }
+    }, [visible]);
+
     const customerGiven = parseInt(customerGivenStr.replace(/\D/g, ''), 10) || 0;
     const changeAmount = customerGiven - totalAmount;
 
@@ -21,11 +32,20 @@ export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm
     const qrUrl = `https://img.vietqr.io/image/970422-0987654321-compact2.png?amount=${totalAmount}&addInfo=ThanhToanPOS&accountName=POS STORE`;
 
     const handleConfirm = () => {
-        if (paymentMethod === 'CASH' && changeAmount < 0) {
-            alert('Khách đưa chưa đủ tiền!');
-            return;
+        if (isSubmitting || isSubmittingRef.current) return;
+        if (paymentMethod === 'CASH') {
+            if (!customerGivenStr.trim()) {
+                setCashError("Vui lòng nhập số tiền khách đưa.");
+                return;
+            }
+            if (changeAmount < 0) {
+                setCashError(`Khách đưa chưa đủ tiền. Còn thiếu ${Math.abs(changeAmount).toLocaleString("vi-VN")} đ.`);
+                return;
+            }
         }
-        onConfirm(paymentMethod, customerGiven);
+        setCashError(null);
+        isSubmittingRef.current = true;
+        onConfirm(paymentMethod, paymentMethod === 'CASH' ? customerGiven : totalAmount);
     };
 
     return (
@@ -58,7 +78,7 @@ export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm
                             Phương thức
                         </Text>
                         <View className="flex-row gap-3 mb-6">
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 onPress={() => setPaymentMethod('CASH')}
                                 className={`flex-1 py-3 items-center border-2 ${paymentMethod === 'CASH' ? 'border-black bg-black' : 'border-black bg-white'}`}
                             >
@@ -68,7 +88,7 @@ export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm
                                 </Text>
                             </TouchableOpacity>
 
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 onPress={() => setPaymentMethod('QR')}
                                 className={`flex-1 py-3 items-center border-2 ${paymentMethod === 'QR' ? 'border-black bg-black' : 'border-black bg-white'}`}
                             >
@@ -82,25 +102,34 @@ export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm
                         {/* Cash Payment */}
                         {paymentMethod === 'CASH' && (
                             <View className="mb-4">
-                                <Text className="text-black mb-2" style={{ fontSize: 11, letterSpacing: 3, textTransform: 'uppercase' }}>
-                                    Khách đưa (đ)
+                                <Text className="text-black font-bold mb-1.5" style={{ fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase' }}>
+                                    Tiền khách đưa <Text style={{ color: '#dc2626', fontWeight: 'bold' }}>*</Text>
                                 </Text>
                                 <TextInput
-                                    className="bg-white border-b-2 border-black px-0 h-14 text-xl font-bold text-black"
-                                    keyboardType="numeric"
-                                    placeholder="Nhập số tiền..."
-                                    placeholderTextColor="#525252"
+                                    testID="checkout-cash-input"
+                                    className={`bg-white border-b-2 ${cashError ? 'border-red-500' : 'border-black'} px-0 h-14 text-xl font-bold text-black`}
+                                    keyboardType="number-pad"
+                                    inputMode="numeric"
+                                    placeholder=""
+                                    placeholderTextColor="transparent"
                                     value={customerGivenStr}
-                                    onChangeText={setCustomerGivenStr}
-                                    style={{ fontStyle: 'italic' }}
+                                    onChangeText={(t) => {
+                                        setCustomerGivenStr(t);
+                                        if (cashError) setCashError(null);
+                                    }}
                                 />
-                                {customerGiven > 0 && (
+                                {cashError && (
+                                    <Text className="text-red-500 text-xs mt-1.5 font-semibold" testID="checkout-cash-error">
+                                        {cashError}
+                                    </Text>
+                                )}
+                                {customerGiven > 0 && !cashError && (
                                     <View className={`flex-row justify-between items-center p-4 mt-4 border-2 ${changeAmount >= 0 ? 'border-black bg-black' : 'border-red-500 bg-white'}`}>
                                         <Text className={`font-medium text-base ${changeAmount >= 0 ? 'text-white' : 'text-red-500'}`} style={{ letterSpacing: 2, textTransform: 'uppercase', fontSize: 11 }}>
-                                            Tiền thối lại
+                                            {changeAmount >= 0 ? 'Tiền thối lại' : 'Còn thiếu'}
                                         </Text>
                                         <Text className={`font-black ${changeAmount >= 0 ? 'text-white' : 'text-red-500'}`} style={{ fontFamily: 'serif', fontSize: 24 }}>
-                                            {changeAmount >= 0 ? changeAmount.toLocaleString() : 'Chưa đủ'} đ
+                                            {Math.abs(changeAmount).toLocaleString("vi-VN")} đ
                                         </Text>
                                     </View>
                                 )}
@@ -118,9 +147,13 @@ export default function CheckoutModal({ visible, onClose, totalAmount, onConfirm
                             </View>
                         )}
 
-                        <CustomButton 
-                            title="Hoàn Tất Giao Dịch →" 
+                        <CustomButton
+                            testID="confirm-checkout-btn"
+                            accessibilityLabel="confirm-checkout-btn"
+                            title={isSubmitting ? "Đang xử lý..." : "Hoàn Tất Giao Dịch →"}
                             onPress={handleConfirm}
+                            loading={isSubmitting}
+                            disabled={isSubmitting}
                         />
                     </View>
                 </View>

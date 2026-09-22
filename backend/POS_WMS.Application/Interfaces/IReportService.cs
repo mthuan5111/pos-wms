@@ -36,6 +36,8 @@ namespace POS_WMS.Application.Interfaces
         public int TotalSKUs { get; set; }
         public int OutOfStockSKUs { get; set; }
         public int LowStockSKUs { get; set; }
+        public int InStockSKUs { get; set; }
+        public int MissingPriceSKUs { get; set; }
 
         public int PendingOrders { get; set; }
 
@@ -74,8 +76,14 @@ namespace POS_WMS.Application.Interfaces
     {
         public int ProductId { get; set; }
         public string ProductName { get; set; } = string.Empty;
+        public string Barcode { get; set; } = string.Empty;
         public int StockQuantity { get; set; }
+        public int LowStockThreshold { get; set; } = 10;
         public string CategoryName { get; set; } = string.Empty;
+        public string SupplierName { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty; // "Hết hàng" / "Sắp hết" / "Thiếu giá"
+        public bool IsSalePriceConfigured { get; set; } = true;
+        public decimal Price { get; set; }
         public DateTime? LastReceiptDate { get; set; }
     }
 }

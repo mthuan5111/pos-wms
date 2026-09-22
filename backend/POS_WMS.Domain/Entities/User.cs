@@ -9,6 +9,9 @@ namespace POS_WMS.Domain.Entities
         public string Name { get; set; } = string.Empty;
         public UserRole Role { get; set; } = UserRole.Cashier; // Default role is "Cashier"
         public bool IsActive { get; set; } = true; // Default to active
+        public bool IsSystemAdmin { get; set; } = false;
+        public bool IsProtected { get; set; } = false;
+        public string NormalizedUsername { get; set; } = string.Empty;
         public string Phone { get; set; } = string.Empty;
         public string? RefreshToken { get; set; }
         public DateTime? RefreshTokenExpiryTime { get; set; }

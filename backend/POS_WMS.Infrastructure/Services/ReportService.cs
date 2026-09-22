@@ -119,43 +119,44 @@ namespace POS_WMS.Infrastructure.Services
                 .Select(p => new
                 {
                     ProductId = p.Id,
+                    ProductCostPrice = p.CostPrice,
+                    LowStockThreshold = p.LowStockThreshold,
+                    IsSalePriceConfigured = p.IsSalePriceConfigured,
                     StockQuantity = _context.Inventories.Where(i => i.ProductId == p.Id).Select(i => (int?)i.StockQuantity).FirstOrDefault() ?? 0
                 })
                 .ToListAsync();
 
-            dto.TotalSKUs = activeProducts.Count(p => p.StockQuantity > 0);
+            dto.TotalSKUs = activeProducts.Count;
             dto.OutOfStockSKUs = activeProducts.Count(p => p.StockQuantity <= 0);
-            dto.LowStockSKUs = activeProducts.Count(p => p.StockQuantity > 0 && p.StockQuantity <= LowStockThreshold);
+            dto.LowStockSKUs = activeProducts.Count(p => p.StockQuantity > 0 && p.StockQuantity <= p.LowStockThreshold);
+            dto.InStockSKUs = activeProducts.Count(p => p.StockQuantity > p.LowStockThreshold);
+            dto.MissingPriceSKUs = activeProducts.Count(p => !p.IsSalePriceConfigured);
 
             decimal inventoryValue = 0;
-            bool inventoryHasMissingCost = false;
             int missingCostInventoryCount = 0;
 
             foreach (var p in activeProducts.Where(p => p.StockQuantity > 0))
             {
-                if (productCosts.TryGetValue(p.ProductId, out var cost))
+                decimal cost = 0;
+                if (productCosts.TryGetValue(p.ProductId, out var recentCost) && recentCost > 0)
                 {
-                    inventoryValue += p.StockQuantity * cost;
+                    cost = recentCost;
+                }
+                else if (p.ProductCostPrice > 0)
+                {
+                    cost = p.ProductCostPrice;
                 }
                 else
                 {
-                    inventoryHasMissingCost = true;
                     missingCostInventoryCount++;
                 }
+
+                inventoryValue += p.StockQuantity * cost;
             }
 
-            if (inventoryHasMissingCost)
-            {
-                dto.TotalInventoryValue = null;
-                dto.HasInventoryValueData = false;
-                dto.MissingCostInventoryProductCount = missingCostInventoryCount;
-            }
-            else
-            {
-                dto.TotalInventoryValue = inventoryValue;
-                dto.HasInventoryValueData = true;
-                dto.MissingCostInventoryProductCount = 0;
-            }
+            dto.TotalInventoryValue = inventoryValue;
+            dto.HasInventoryValueData = true;
+            dto.MissingCostInventoryProductCount = missingCostInventoryCount;
 
             return dto;
         }
@@ -320,35 +321,66 @@ namespace POS_WMS.Infrastructure.Services
 
         public async Task<List<LowStockProductDto>> GetLowStockProductsAsync(int threshold)
         {
-            var lowStockItems = await _context.Inventories
-                .Include(i => i.Product)
-                .ThenInclude(p => p!.Category)
-                .Where(i => i.StockQuantity < threshold && i.StockQuantity > 0)
-                .Select(i => new LowStockProductDto
-                {
-                    ProductId = i.ProductId,
-                    ProductName = i.Product!.Name,
-                    StockQuantity = i.StockQuantity,
-                    CategoryName = i.Product.Category!.Name
-                })
+            var activeProducts = await _context.Products
+                .Include(p => p.Category)
+                .Include(p => p.Supplier)
+                .Where(p => p.IsActive)
                 .ToListAsync();
+
+            var inventories = await _context.Inventories
+                .ToDictionaryAsync(i => i.ProductId, i => i.StockQuantity);
+
+            var list = new List<LowStockProductDto>();
+            foreach (var p in activeProducts)
+            {
+                var stock = inventories.TryGetValue(p.Id, out var qty) ? qty : 0;
+                var effectiveThreshold = p.LowStockThreshold >= 0 ? p.LowStockThreshold : (threshold > 0 ? threshold : 10);
+                bool isOutOfStock = stock <= 0;
+                bool isLowStock = stock > 0 && stock <= effectiveThreshold;
+                bool isMissingPrice = !p.IsSalePriceConfigured;
+
+                if (isOutOfStock || isLowStock || isMissingPrice)
+                {
+                    string status = "Sắp hết";
+                    if (isMissingPrice) status = "Thiếu giá";
+                    else if (isOutOfStock) status = "Hết hàng";
+
+                    list.Add(new LowStockProductDto
+                    {
+                        ProductId = p.Id,
+                        ProductName = p.Name,
+                        Barcode = p.Barcode,
+                        StockQuantity = stock,
+                        LowStockThreshold = effectiveThreshold,
+                        Price = p.Price,
+                        IsSalePriceConfigured = p.IsSalePriceConfigured,
+                        CategoryName = p.Category != null ? p.Category.Name : "Chưa phân loại",
+                        SupplierName = p.Supplier != null ? p.Supplier.Name : "Chưa có NCC",
+                        Status = status
+                    });
+                }
+            }
             
-            foreach (var item in lowStockItems)
+            foreach (var item in list)
             {
                 var lastReceipt = await _context.GoodsReceiptDetails
                     .Include(d => d.GoodsReceipt)
                     .Where(d => d.ProductId == item.ProductId)
                     .OrderByDescending(d => d.GoodsReceipt!.ReceiptDate)
-                    .Select(d => d.GoodsReceipt!.ReceiptDate)
+                    .Select(d => (DateTime?)d.GoodsReceipt!.ReceiptDate)
                     .FirstOrDefaultAsync();
                 
-                if (lastReceipt != default)
+                if (lastReceipt.HasValue)
                 {
-                    item.LastReceiptDate = lastReceipt;
+                    item.LastReceiptDate = lastReceipt.Value;
                 }
             }
 
-            return lowStockItems.OrderBy(i => i.StockQuantity).ToList();
+            return list
+                .OrderBy(item => item.Status == "Hết hàng" ? 0 : (item.Status == "Sắp hết" ? 1 : 2))
+                .ThenBy(item => item.StockQuantity)
+                .ThenBy(item => item.ProductName)
+                .ToList();
         }
     }
 }

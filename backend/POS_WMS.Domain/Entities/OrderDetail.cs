@@ -9,6 +9,8 @@ namespace POS_WMS.Domain.Entities
         public int ProductId { get; set; }
         public int Quantity { get; set; }
         public decimal UnitPrice { get; set; }
+        public string ProductName { get; set; } = string.Empty;
+        public string Barcode { get; set; } = string.Empty;
         [ForeignKey("OrderId")]
         public Order Order { get; set; } = null!;
         [ForeignKey("ProductId")]

@@ -35,19 +35,19 @@ namespace POS_WMS.Infrastructure.Services
             var user = await _userRepository.GetByUsernameAsync(request.Username);
             if (user == null)
             {
-                // Can't log to DB due to FK constraint for UserId
+                await _auditLogService.LogActionAsync(null, request.Username ?? "Unknown", "LOGIN_FAILURE", "User", null, "Tài khoản không tồn tại", "FAILED");
                 return null;
             }
             if (!user.IsActive)
             {
-                await _auditLogService.LogActionAsync(user.Id, request.Username ?? "Unknown", "LOGIN_FAILED", "System", null, "Tài khoản bị khóa", "FAILED");
+                await _auditLogService.LogActionAsync(user.Id, request.Username ?? "Unknown", "LOGIN_FAILURE", "User", user.Id.ToString(), "Tài khoản bị khóa", "FAILED");
                 return null;
             }
 
             var result = _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
             if (result == PasswordVerificationResult.Failed)
             {
-                await _auditLogService.LogActionAsync(user.Id, user.Username, "LOGIN_FAILED", "User", user.Id.ToString(), "Sai mật khẩu", "FAILED");
+                await _auditLogService.LogActionAsync(user.Id, user.Username, "LOGIN_FAILURE", "User", user.Id.ToString(), "Sai mật khẩu", "FAILED");
                 return null;
             }
 
@@ -72,6 +72,19 @@ namespace POS_WMS.Infrastructure.Services
                 Name = user.Name,
                 Role = user.Role.ToString()
             };
+        }
+
+        public async Task LogoutAsync(int userId, string username)
+        {
+            var user = await _userRepository.GetByIdAsync(userId);
+            if (user != null)
+            {
+                user.RefreshToken = null;
+                user.RefreshTokenExpiryTime = null;
+                _userRepository.Update(user);
+                await _unitOfWork.SaveChangesAsync();
+            }
+            await _auditLogService.LogActionAsync(userId, username, "LOGOUT", "User", userId > 0 ? userId.ToString() : null, $"Đăng xuất khỏi hệ thống: {username}", "SUCCESS");
         }
 
         public async Task<AuthResponseDTO?> RefreshTokenAsync(TokenRequestDTO request)

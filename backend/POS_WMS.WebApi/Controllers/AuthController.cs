@@ -41,5 +41,16 @@ namespace POS_WMS.WebApi.Controllers
             }
             return Ok(ApiResponse<AuthResponseDTO>.Success(response, "Làm mới mã truy cập thành công!"));
         }
+
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout()
+        {
+            var userIdStr = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            var username = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "Người dùng";
+            int.TryParse(userIdStr, out var userId);
+
+            await _authService.LogoutAsync(userId, username);
+            return Ok(ApiResponse<bool>.Success(true, "Đăng xuất thành công"));
+        }
     }
 }

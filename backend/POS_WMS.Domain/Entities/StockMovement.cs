@@ -14,8 +14,11 @@ namespace POS_WMS.Domain.Entities
         public int BalanceAfter { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string CreatedBy { get; set; } = string.Empty;
+        public int? ShiftId { get; set; }
 
         [ForeignKey("ProductId")]
         public Product? Product { get; set; }
+        [ForeignKey("ShiftId")]
+        public Shift? Shift { get; set; }
     }
 }

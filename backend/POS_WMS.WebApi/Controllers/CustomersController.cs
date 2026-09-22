@@ -7,12 +7,12 @@ using POS_WMS.Application.DTOs;
 using POS_WMS.Application.Interfaces;
 using POS_WMS.Domain.Entities;
 using POS_WMS.WebApi.Common;
-using CloudinaryDotNet.Actions;
 
 namespace POS_WMS.WebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Route("api/Customers")]
     [Authorize(Roles = "Admin,Manager,Cashier")]
     public class CustomerController : ControllerBase
     {
@@ -40,8 +40,9 @@ namespace POS_WMS.WebApi.Controllers
                         Id = c.Id,
                         Name = c.Name,
                         Phone = c.Phone,
-                        Address = c.Address
-
+                        Address = c.Address,
+                        Code = c.Code,
+                        IsSystem = c.IsSystem
                     });
                 }
                 return Ok(ApiResponse<List<CustomerDto>>.Success(dtos));
@@ -123,6 +124,59 @@ namespace POS_WMS.WebApi.Controllers
             }
         }
 
+        private static readonly System.Threading.SemaphoreSlim _systemCustomerLock = new(1, 1);
+
+        [HttpGet("default")]
+        public async Task<IActionResult> GetDefaultCustomer()
+        {
+            await _systemCustomerLock.WaitAsync();
+            try
+            {
+                var customers = await _customerRepository.GetAllAsync();
+                var defaultCustomer = customers.FirstOrDefault(c => c.Code == "WALK_IN_CUSTOMER")
+                    ?? customers.FirstOrDefault(c => c.Phone == "0000000000" || c.Name == "Khách lẻ");
+
+                if (defaultCustomer == null)
+                {
+                    defaultCustomer = new Customer
+                    {
+                        Name = "Khách lẻ",
+                        Phone = "0000000000",
+                        Address = "Khách mua trực tiếp tại quầy",
+                        Code = "WALK_IN_CUSTOMER",
+                        IsSystem = true
+                    };
+                    await _customerRepository.AddAsync(defaultCustomer);
+                    await _unitOfWork.SaveChangesAsync();
+                }
+                else if (defaultCustomer.Code != "WALK_IN_CUSTOMER" || !defaultCustomer.IsSystem)
+                {
+                    defaultCustomer.Code = "WALK_IN_CUSTOMER";
+                    defaultCustomer.IsSystem = true;
+                    _customerRepository.Update(defaultCustomer);
+                    await _unitOfWork.SaveChangesAsync();
+                }
+
+                return Ok(ApiResponse<CustomerDto>.Success(new CustomerDto
+                {
+                    Id = defaultCustomer.Id,
+                    Name = defaultCustomer.Name,
+                    Phone = defaultCustomer.Phone,
+                    Address = defaultCustomer.Address,
+                    Code = defaultCustomer.Code,
+                    IsSystem = defaultCustomer.IsSystem
+                }));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<CustomerDto>.Failure($"Lỗi: {ex.Message}"));
+            }
+            finally
+            {
+                _systemCustomerLock.Release();
+            }
+        }
+
         [HttpDelete("{id}")]
         [Authorize(Roles = "Admin,Manager")]
         public async Task<IActionResult> DeleteCustomer(int id)
@@ -133,6 +187,10 @@ namespace POS_WMS.WebApi.Controllers
                 if (customer == null)
                 {
                     return NotFound(ApiResponse<bool>.Failure("Không tìm thấy khách hàng", "ERR_NOT_FOUND"));
+                }
+                if (customer.IsSystem || customer.Code == "WALK_IN_CUSTOMER")
+                {
+                    return BadRequest(ApiResponse<bool>.Failure("Không thể xóa khách hàng hệ thống.", "ERR_DELETE_SYSTEM_CUSTOMER"));
                 }
                 _customerRepository.Delete(customer);
                 await _unitOfWork.SaveChangesAsync();

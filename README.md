@@ -1,1 +1,1 @@
-# pos-wms
+POS-WMS là hệ thống quản lý bán hàng và kho đa nền tảng dành cho Web và Android. Hệ thống hỗ trợ quản lý bán hàng, sản phẩm, tồn kho, phiếu nhập, hóa đơn và ca làm việc, đồng thời có thể hoạt động khi mất kết nối mạng và đồng bộ dữ liệu khi kết nối được khôi phục.

@@ -7,9 +7,11 @@ interface CustomButtonProps {
     disabled?: boolean;
     className?: string;
     variant?: 'primary' | 'outline' | 'ghost' | 'danger';
+    testID?: string;
+    accessibilityLabel?: string;
 }
 
-export default function CustomButton({ title, onPress, loading, disabled, className, variant = 'primary' }: CustomButtonProps) {
+export default function CustomButton({ title, onPress, loading, disabled, className, variant = 'primary', testID, accessibilityLabel }: CustomButtonProps) {
     const baseStyles = 'py-4 px-8 flex-row justify-center items-center my-2';
     const disabledStyle = disabled || loading ? 'opacity-50' : '';
 
@@ -29,6 +31,8 @@ export default function CustomButton({ title, onPress, loading, disabled, classN
 
     return (
         <TouchableOpacity
+            testID={testID}
+            accessibilityLabel={accessibilityLabel}
             onPress={onPress}
             disabled={disabled || loading}
             className={`${baseStyles} ${variantStyles[variant]} ${disabledStyle} ${className || ''}`}

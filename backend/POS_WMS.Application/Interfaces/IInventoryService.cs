@@ -8,5 +8,6 @@ namespace POS_WMS.Application.Interfaces
     {
         Task<List<InventoryDto>> GetAllInventoriesAsync();
         Task<bool> AdjustStockAsync(int id, InventoryUpdateRequestDto request);
+        Task<bool> SyncAdjustmentAsync(StockAdjustmentSyncDto request);
     }
 }

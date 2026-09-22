@@ -16,7 +16,11 @@ namespace POS_WMS.Application.DTOs
         public decimal TotalAmount { get; set; }
         public DateTime OrderDate { get; set; }
         public OrderStatus Status { get; set; }
+        public string? PaymentMethod { get; set; }
         public string OfflineReferenceId { get; set; } = string.Empty;
+        public int? RecoveredByUserId { get; set; }
+        public string? RecoveryActorName { get; set; }
+        public int? ShiftId { get; set; }
 
         public List<OrderDetailSyncDto> Details { get; set; } = new List<OrderDetailSyncDto>();
     }

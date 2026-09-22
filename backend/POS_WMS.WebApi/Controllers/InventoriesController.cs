@@ -59,5 +59,28 @@ namespace POS_WMS.WebApi.Controllers
                 return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
             }
         }
+
+        [HttpPost("adjust")]
+        [Authorize(Roles = "Admin,Manager,WarehouseStaff")]
+        public async Task<IActionResult> SyncAdjustment([FromBody] StockAdjustmentSyncDto request)
+        {
+            try
+            {
+                await _inventoryService.SyncAdjustmentAsync(request);
+                return Ok(ApiResponse<bool>.Success(true, "Đồng bộ điều chỉnh tồn kho thành công"));
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(ApiResponse<bool>.Failure(ex.Message));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ApiResponse<bool>.Failure(ex.Message));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
+            }
+        }
     }
 }

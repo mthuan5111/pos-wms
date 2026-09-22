@@ -4,9 +4,29 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { getAuditLogs } from "@/services/systemLogApi";
+import { formatVietnamDateTime } from "@/utils/timezone";
+
+export interface AuditLogDto {
+  id: number;
+  userId: number;
+  user?: { username: string; role: string; name: string };
+  action: string;
+  tableName: string;
+  recordId: string;
+  oldValues: string;
+  newValues: string;
+  timestamp: string;
+  createdAt?: string;
+  username?: string;
+  userName?: string;
+  entityName?: string;
+  entityId?: string;
+  details?: string;
+  description?: string;
+}
 
 export default function SystemLogScreen() {
-  const [logs, setLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<AuditLogDto[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
@@ -38,7 +58,7 @@ export default function SystemLogScreen() {
     setIsLoading(true);
     try {
       const res = await getAuditLogs(pageNum, 20, actionFilter, newController.signal);
-      
+
       // Check sequence ID
       if (seqId !== currentRequestId.current) {
           console.log(`[SystemLog] Ignored stale response for reqId ${seqId}`);
@@ -48,7 +68,7 @@ export default function SystemLogScreen() {
       if (res.isSuccess) {
         const rawData = res.data;
         const fetchedLogs = Array.isArray(rawData) ? rawData : (rawData?.data || rawData?.items || []);
-        
+
         if (append) {
           setLogs(prev => [...prev, ...fetchedLogs]);
         } else {
@@ -88,14 +108,6 @@ export default function SystemLogScreen() {
     }
   };
 
-  const formatDate = (isoStr: string) => {
-    try {
-      const d = new Date(isoStr);
-      return d.toLocaleString("vi-VN");
-    } catch {
-      return isoStr;
-    }
-  };
 
   const getActionColor = (action: string) => {
     const act = action?.toUpperCase() || "";
@@ -111,20 +123,20 @@ export default function SystemLogScreen() {
   return (
     <SafeAreaView className="flex-1 bg-white">
       {/* Header */}
-      <View className="px-6 pt-5 pb-4 bg-white border-b-4 border-black">
-        <View className="flex-row justify-between items-center mb-2">
+      <View className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3 bg-white border-b-4 border-black">
+        <View className="flex-row justify-between items-center mb-1">
           <View>
-            <Text style={{ fontFamily: 'serif', fontSize: 32, fontWeight: '900', color: '#000', letterSpacing: -1, textTransform: 'uppercase' }}>
+            <Text className="font-serif text-2xl sm:text-3xl font-black text-black tracking-tight uppercase">
               Nhật ký hệ thống
             </Text>
-            <Text className="mt-1" style={{ fontSize: 11, letterSpacing: 4, color: '#525252', textTransform: 'uppercase' }}>
+            <Text className="mt-0.5 text-[10px] sm:text-[11px] tracking-widest text-neutral-600 uppercase">
               Audit Logs (Lịch sử hoạt động)
             </Text>
           </View>
         </View>
 
         {/* Action Filter Pills */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3 flex-row">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-2 flex-row">
           {actionFilterOptions.map(opt => {
             const isSelected = selectedAction === opt.value;
             return (
@@ -146,7 +158,7 @@ export default function SystemLogScreen() {
         data={logs}
         keyExtractor={(item, index) => item.id?.toString() || index.toString()}
         refreshControl={<RefreshControl refreshing={isLoading && page === 1} onRefresh={() => loadLogs(1, false)} tintColor="#000" />}
-        contentContainerStyle={{ padding: 16 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.5}
@@ -156,9 +168,9 @@ export default function SystemLogScreen() {
               <Text className={`font-black uppercase tracking-widest text-xs ${getActionColor(item.action)}`}>
                 {item.action}
               </Text>
-              <Text className="text-gray-500 font-mono text-xs">{formatDate(item.timestamp || item.createdAt)}</Text>
+              <Text className="text-gray-500 font-mono text-xs">{formatVietnamDateTime(item.timestamp || item.createdAt || "")}</Text>
             </View>
-            
+
             <View className="flex-row items-center mb-2 flex-wrap">
               <Ionicons name="person" size={14} color="#000" />
               <Text className="text-black font-bold ml-1 text-xs">User: {item.username || item.userName || "Hệ thống"}</Text>

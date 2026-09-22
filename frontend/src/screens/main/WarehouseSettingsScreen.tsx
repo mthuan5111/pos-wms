@@ -1,3 +1,4 @@
+import { useModalStore } from '@/store/useModalStore';
 import React, { useEffect, useState, useCallback } from "react";
 import { View, Text, ScrollView, Alert, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -6,24 +7,34 @@ import { getDBConnection, clearLocalData } from "@/database/db";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import CustomButton from "@/components/CustomButton";
+import { useSafeLogout } from "@/hooks/useSafeLogout";
 
 export default function WarehouseSettingsScreen() {
-  const { user, logoutAsync } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const { handleLogout } = useSafeLogout();
   const [unsyncedReceiptsCount, setUnsyncedReceiptsCount] = useState(0);
   const [totalReceiptsCount, setTotalReceiptsCount] = useState(0);
+  const [totalAdjustmentsCount, setTotalAdjustmentsCount] = useState(0);
 
   const loadWarehouseData = async () => {
     try {
       const db = await getDBConnection();
-      const unsynced = await db.getAllAsync<any>(
-        "SELECT * FROM LocalGoodsReceipts WHERE IsSynced = 0"
+      const unsynced = await db.getAllAsync<{ OfflineReferenceId: string }>(
+        "SELECT OfflineReferenceId FROM LocalGoodsReceipts WHERE IsSynced = 0"
       );
       setUnsyncedReceiptsCount(unsynced.length);
 
-      const allReceipts = await db.getAllAsync<any>(
-        "SELECT * FROM LocalGoodsReceipts"
+      const allReceipts = await db.getAllAsync<{ OfflineReferenceId: string }>(
+        "SELECT OfflineReferenceId FROM LocalGoodsReceipts"
       );
       setTotalReceiptsCount(allReceipts.length);
+
+      try {
+        const adjustments = await db.getAllAsync<{ OfflineReferenceId: string }>(
+          "SELECT OfflineReferenceId FROM LocalStockAdjustments"
+        );
+        setTotalAdjustmentsCount(adjustments.length);
+      } catch {}
     } catch (e) {
       console.error("[WarehouseSettings] Lỗi tải dữ liệu kho:", e);
     }
@@ -35,30 +46,7 @@ export default function WarehouseSettingsScreen() {
     }, [])
   );
 
-  const handleLogout = async () => {
-    if (unsyncedReceiptsCount > 0) {
-      const msg = `Bạn đang có ${unsyncedReceiptsCount} phiếu nhập chưa đồng bộ lên máy chủ. Bạn có chắc chắn muốn đăng xuất?`;
-      if (Platform.OS === 'web') {
-        if (!window.confirm(msg)) return;
-      } else {
-        Alert.alert("Cảnh báo", msg, [
-          { text: "Hủy", style: "cancel" },
-          { text: "Vẫn đăng xuất", style: "destructive", onPress: confirmLogout }
-        ]);
-        return;
-      }
-    }
-    await confirmLogout();
-  };
 
-  const confirmLogout = async () => {
-    try {
-      await clearLocalData();
-      await logoutAsync();
-    } catch (e) {
-      console.error("Lỗi đăng xuất:", e);
-    }
-  };
 
   return (
     <SafeAreaView className="flex-1 bg-white">
@@ -69,8 +57,12 @@ export default function WarehouseSettingsScreen() {
         </View>
         <Ionicons name="cube-outline" size={32} color="#000" />
       </View>
-      
-      <ScrollView className="flex-1 p-4" showsVerticalScrollIndicator={false}>
+
+      <ScrollView
+        className="flex-1 p-4"
+        contentContainerStyle={{ paddingBottom: 110 }}
+        showsVerticalScrollIndicator={false}
+      >
         {/* User Info */}
         <View className="mb-4 p-4 border-2 border-black bg-white">
           <Text className="font-bold text-xs text-gray-500 uppercase tracking-widest border-b-2 border-black pb-2 mb-3">Tài khoản Thủ kho</Text>
@@ -88,13 +80,18 @@ export default function WarehouseSettingsScreen() {
           </View>
         </View>
 
-        {/* Sync Status */}
+        {/* Sync Status & Shift Stats */}
         <View className="mb-6 p-4 border-2 border-black bg-white">
-          <Text className="font-black text-sm text-black uppercase tracking-wider border-b-2 border-black pb-2 mb-3">Trạng thái dữ liệu kho</Text>
+          <Text className="font-black text-sm text-black uppercase tracking-wider border-b-2 border-black pb-2 mb-3">Thống kê hoạt động kho trong ca</Text>
 
           <View className="flex-row justify-between items-center mb-3">
             <Text className="text-gray-600 font-bold">Tổng số phiếu nhập đã lập:</Text>
             <Text className="text-black font-black text-base">{totalReceiptsCount} phiếu</Text>
+          </View>
+
+          <View className="flex-row justify-between items-center mb-3">
+            <Text className="text-gray-600 font-bold">Tổng số lần điều chỉnh kho:</Text>
+            <Text className="text-black font-black text-base">{totalAdjustmentsCount} lần</Text>
           </View>
 
           <View className="flex-row justify-between items-center">

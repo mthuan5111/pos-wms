@@ -20,11 +20,24 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetAllOrders()
+        public async Task<IActionResult> GetAllOrders([FromQuery] int? userId = null)
         {
             try
             {
                 var orders = await _orderService.GetAllOrdersAsync();
+                var userRole = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+                var currentUserIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                int.TryParse(currentUserIdClaim, out var currentUserId);
+
+                if (string.Equals(userRole, "Cashier", StringComparison.OrdinalIgnoreCase))
+                {
+                    orders = orders.Where(o => o.UserId == currentUserId).ToList();
+                }
+                else if (userId.HasValue && userId.Value > 0)
+                {
+                    orders = orders.Where(o => o.UserId == userId.Value).ToList();
+                }
+
                 return Ok(ApiResponse<List<OrderDto>>.Success(orders));
             }
             catch (Exception ex)
@@ -56,8 +69,17 @@ namespace POS_WMS.WebApi.Controllers
         {
             try
             {
+                if (request.UserId <= 0)
+                {
+                    var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                    if (int.TryParse(userIdClaim, out var claimUserId))
+                    {
+                        request.UserId = claimUserId;
+                    }
+                }
+
                 var orderId = await _orderService.SyncOfflineOrderAsync(request);
-                
+
                 if (orderId == 0)
                 {
                     return Ok(ApiResponse<string>.Success("Hóa đơn này đã được đồng bộ trước đó"));
@@ -75,7 +97,8 @@ namespace POS_WMS.WebApi.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<string>.Failure($"Đồng bộ thất bại: {ex.Message}"));
+                var msg = ex.InnerException != null ? $"{ex.Message} --> {ex.InnerException.Message}" : ex.Message;
+                return StatusCode(500, ApiResponse<string>.Failure($"Đồng bộ thất bại: {msg}"));
             }
         }
     }

@@ -19,11 +19,21 @@ namespace POS_WMS.Infrastructure.Services
             _context = context;
         }
 
-        public async Task LogActionAsync(int userId, string userName, string action, string entityType, string? entityId, string? details, string? result = null, string? correlationId = null)
+        public async Task LogActionAsync(int? userId, string userName, string action, string entityType, string? entityId, string? details, string? result = null, string? correlationId = null)
         {
+            int? validUserId = null;
+            if (userId.HasValue && userId.Value > 0)
+            {
+                var userExists = await _context.Users.AnyAsync(u => u.Id == userId.Value);
+                if (userExists)
+                {
+                    validUserId = userId.Value;
+                }
+            }
+
             var log = new AuditLog
             {
-                UserId = userId,
+                UserId = validUserId,
                 UserName = userName,
                 Action = action,
                 EntityType = entityType,
@@ -44,12 +54,62 @@ namespace POS_WMS.Infrastructure.Services
 
             if (userId.HasValue)
                 query = query.Where(l => l.UserId == userId.Value);
+
             if (!string.IsNullOrEmpty(action))
-                query = query.Where(l => l.Action == action);
+            {
+                var upper = action.ToUpperInvariant();
+                if (upper == "LOGIN")
+                {
+                    query = query.Where(l => l.Action == "LOGIN_SUCCESS" || l.Action == "LOGIN_FAILURE" || l.Action == "LOGIN_FAILED" || l.Action == "LOGOUT");
+                }
+                else if (upper == "USER" || upper == "ACCOUNT")
+                {
+                    query = query.Where(l => l.Action.StartsWith("USER_"));
+                }
+                else if (upper == "PRODUCT")
+                {
+                    query = query.Where(l => l.Action.StartsWith("PRODUCT_"));
+                }
+                else if (upper == "CATEGORY")
+                {
+                    query = query.Where(l => l.Action.StartsWith("CATEGORY_"));
+                }
+                else if (upper == "SUPPLIER")
+                {
+                    query = query.Where(l => l.Action.StartsWith("SUPPLIER_"));
+                }
+                else if (upper == "ORDER" || upper == "SALE")
+                {
+                    query = query.Where(l => l.Action == "ORDER_CREATED" || l.Action == "SALE");
+                }
+                else if (upper == "RECEIPT" || upper == "IMPORT")
+                {
+                    query = query.Where(l => l.Action == "GOODS_RECEIPT_CREATED" || l.Action == "RECEIPT" || l.Action == "IMPORT");
+                }
+                else if (upper == "STOCK" || upper == "INVENTORY")
+                {
+                    query = query.Where(l => l.Action == "STOCK_ADJUSTED" || l.Action.Contains("ADJUST"));
+                }
+                else
+                {
+                    query = query.Where(l => l.Action == action);
+                }
+            }
+
             if (startDate.HasValue)
-                query = query.Where(l => l.CreatedAt >= startDate.Value);
+            {
+                var utcStart = startDate.Value.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(startDate.Value, DateTimeKind.Utc)
+                    : startDate.Value.ToUniversalTime();
+                query = query.Where(l => l.CreatedAt >= utcStart);
+            }
             if (endDate.HasValue)
-                query = query.Where(l => l.CreatedAt <= endDate.Value);
+            {
+                var utcEnd = endDate.Value.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(endDate.Value, DateTimeKind.Utc)
+                    : endDate.Value.ToUniversalTime();
+                query = query.Where(l => l.CreatedAt <= utcEnd);
+            }
 
             return await query
                 .OrderByDescending(l => l.CreatedAt)
@@ -64,7 +124,7 @@ namespace POS_WMS.Infrastructure.Services
                     EntityType = l.EntityType,
                     EntityId = l.EntityId,
                     Details = l.Details,
-                    CreatedAt = l.CreatedAt,
+                    CreatedAt = DateTime.SpecifyKind(l.CreatedAt, DateTimeKind.Utc),
                     CorrelationId = l.CorrelationId,
                     Result = l.Result
                 })
@@ -86,7 +146,7 @@ namespace POS_WMS.Infrastructure.Services
                     EntityType = l.EntityType,
                     EntityId = l.EntityId,
                     Details = l.Details,
-                    CreatedAt = l.CreatedAt,
+                    CreatedAt = DateTime.SpecifyKind(l.CreatedAt, DateTimeKind.Utc),
                     CorrelationId = l.CorrelationId,
                     Result = l.Result
                 })
@@ -99,12 +159,62 @@ namespace POS_WMS.Infrastructure.Services
 
             if (userId.HasValue)
                 query = query.Where(l => l.UserId == userId.Value);
+
             if (!string.IsNullOrEmpty(action))
-                query = query.Where(l => l.Action == action);
+            {
+                var upper = action.ToUpperInvariant();
+                if (upper == "LOGIN")
+                {
+                    query = query.Where(l => l.Action == "LOGIN_SUCCESS" || l.Action == "LOGIN_FAILURE" || l.Action == "LOGIN_FAILED" || l.Action == "LOGOUT");
+                }
+                else if (upper == "USER" || upper == "ACCOUNT")
+                {
+                    query = query.Where(l => l.Action.StartsWith("USER_"));
+                }
+                else if (upper == "PRODUCT")
+                {
+                    query = query.Where(l => l.Action.StartsWith("PRODUCT_"));
+                }
+                else if (upper == "CATEGORY")
+                {
+                    query = query.Where(l => l.Action.StartsWith("CATEGORY_"));
+                }
+                else if (upper == "SUPPLIER")
+                {
+                    query = query.Where(l => l.Action.StartsWith("SUPPLIER_"));
+                }
+                else if (upper == "ORDER" || upper == "SALE")
+                {
+                    query = query.Where(l => l.Action == "ORDER_CREATED" || l.Action == "SALE");
+                }
+                else if (upper == "RECEIPT" || upper == "IMPORT")
+                {
+                    query = query.Where(l => l.Action == "GOODS_RECEIPT_CREATED" || l.Action == "RECEIPT" || l.Action == "IMPORT");
+                }
+                else if (upper == "STOCK" || upper == "INVENTORY")
+                {
+                    query = query.Where(l => l.Action == "STOCK_ADJUSTED" || l.Action.Contains("ADJUST"));
+                }
+                else
+                {
+                    query = query.Where(l => l.Action == action);
+                }
+            }
+
             if (startDate.HasValue)
-                query = query.Where(l => l.CreatedAt >= startDate.Value);
+            {
+                var utcStart = startDate.Value.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(startDate.Value, DateTimeKind.Utc)
+                    : startDate.Value.ToUniversalTime();
+                query = query.Where(l => l.CreatedAt >= utcStart);
+            }
             if (endDate.HasValue)
-                query = query.Where(l => l.CreatedAt <= endDate.Value);
+            {
+                var utcEnd = endDate.Value.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(endDate.Value, DateTimeKind.Utc)
+                    : endDate.Value.ToUniversalTime();
+                query = query.Where(l => l.CreatedAt <= utcEnd);
+            }
 
             return await query.CountAsync();
         }

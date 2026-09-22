@@ -1,39 +1,65 @@
 import React, { useState } from "react";
-import { View, Text, TouchableOpacity } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuthStore } from "@/store/authStore";
+import { useRoute } from "@react-navigation/native";
 
 import ProductsTab from "./inventory_tabs/ProductsTab";
 import CategoriesTab from "./inventory_tabs/CategoriesTab";
+import SuppliersTab from "./inventory_tabs/SuppliersTab";
 
-type TabType = "products" | "categories";
+
+type TabType = "products" | "categories" | "suppliers";
 
 export default function InventoryScreen() {
-  const [activeTab, setActiveTab] = useState<TabType>("products");
+  const route = useRoute<any>();
+  const [activeTab, setActiveTab] = useState<TabType>(route?.params?.tab || "products");
   const { user } = useAuthStore();
   const role = user?.role || "";
+
+  React.useEffect(() => {
+    if (route?.params?.tab) {
+      setActiveTab(route.params.tab);
+    }
+  }, [route?.params?.tab]);
 
   const renderTabContent = () => {
     switch (activeTab) {
       case "products":
-        return <ProductsTab />;
+        return (
+          <ProductsTab
+            initialSearch={route?.params?.search}
+            targetProductId={route?.params?.targetProductId}
+            targetBarcode={route?.params?.targetBarcode}
+            focusField={route?.params?.focusField}
+          />
+        );
       case "categories":
         return <CategoriesTab />;
+      case "suppliers":
+        return <SuppliersTab />;
       default:
-        return <ProductsTab />;
+        return (
+          <ProductsTab
+            initialSearch={route?.params?.search}
+            targetProductId={route?.params?.targetProductId}
+            targetBarcode={route?.params?.targetBarcode}
+            focusField={route?.params?.focusField}
+          />
+        );
     }
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView testID="inventory-screen" className="flex-1 bg-white">
       {/* Header Section */}
-      <View className="px-6 pt-5 pb-4 bg-white border-b-4 border-black">
-        <View className="flex-row justify-between items-center mb-4">
+      <View className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3 bg-white border-b-4 border-black">
+        <View className="flex-row justify-between items-center mb-2">
           <View>
-            <Text style={{ fontFamily: 'serif', fontSize: 36, fontWeight: '900', color: '#000', letterSpacing: -1, textTransform: 'uppercase' }}>
+            <Text className="font-serif text-2xl sm:text-3xl font-black text-black tracking-tight uppercase">
               Quản lý kho
             </Text>
-            <Text className="mt-1" style={{ fontSize: 11, letterSpacing: 4, color: '#525252', textTransform: 'uppercase' }}>
+            <Text className="mt-0.5 text-[10px] sm:text-[11px] tracking-widest text-neutral-600 uppercase">
               Phân hệ WMS
             </Text>
           </View>
@@ -41,22 +67,35 @@ export default function InventoryScreen() {
 
         {/* Tab Navigation */}
         <View className="flex-row border-b-2 border-black mt-2">
-          <TouchableOpacity 
-            onPress={() => setActiveTab("products")}
-            className={`flex-1 items-center pb-2 ${activeTab === "products" ? "border-b-4 border-black" : ""}`}
-          >
-            <Text className={`font-bold uppercase tracking-widest text-xs ${activeTab === "products" ? "text-black" : "text-gray-400"}`}>
-              Sản phẩm
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            onPress={() => setActiveTab("categories")}
-            className={`flex-1 items-center pb-2 ${activeTab === "categories" ? "border-b-4 border-black" : ""}`}
-          >
-            <Text className={`font-bold uppercase tracking-widest text-xs ${activeTab === "categories" ? "text-black" : "text-gray-400"}`}>
-              Danh mục
-            </Text>
-          </TouchableOpacity>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, flexDirection: 'row' }}>
+            <TouchableOpacity
+              testID="tab-products"
+              onPress={() => setActiveTab("products")}
+              className={`flex-1 min-w-[90px] items-center pb-2.5 ${activeTab === "products" ? "border-b-4 border-black" : ""}`}
+            >
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "products" ? "text-black" : "text-gray-400"}`}>
+                Sản phẩm
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="tab-categories"
+              onPress={() => setActiveTab("categories")}
+              className={`flex-1 min-w-[90px] items-center pb-2.5 ${activeTab === "categories" ? "border-b-4 border-black" : ""}`}
+            >
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "categories" ? "text-black" : "text-gray-400"}`}>
+                Danh mục
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="tab-suppliers"
+              onPress={() => setActiveTab("suppliers")}
+              className={`flex-1 min-w-[110px] items-center pb-2.5 ${activeTab === "suppliers" ? "border-b-4 border-black" : ""}`}
+            >
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "suppliers" ? "text-black" : "text-gray-400"}`}>
+                Nhà cung cấp
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       </View>
 

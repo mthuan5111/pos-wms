@@ -6,6 +6,8 @@ import { StatusBar } from "expo-status-bar";
 import { initLocalDatabase } from "@/database/db";
 import RootNavigator from "@/navigation/RootNavigator";
 
+import GlobalModal from "@/components/GlobalModal";
+
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
 
@@ -38,6 +40,7 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="dark" />
       <RootNavigator />
+      <GlobalModal />
     </SafeAreaProvider>
   );
 }

@@ -1,99 +1,185 @@
-import React, { useState, useCallback, useMemo } from "react";
-import { View, Text, ScrollView, RefreshControl, Dimensions, Platform, Alert, ActivityIndicator, TouchableOpacity } from "react-native";
+import React, { useState, useCallback, useMemo, useRef } from "react";
+import { View, Text, ScrollView, RefreshControl, Platform, Alert, ActivityIndicator, TouchableOpacity, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { LineChart } from "react-native-chart-kit";
-import { 
-  getDashboardSummary, 
-  getTopProducts, 
+import {
+  getDashboardSummary,
+  getTopProducts,
   getRevenueChartComparison,
+  getLowStockProducts,
   DashboardSummaryDto,
   TopProductDto,
-  RevenueComparisonPointDto
+  RevenueComparisonPointDto,
+  LowStockProductDto
 } from "@/services/reportApi";
-
-const screenWidth = Dimensions.get("window").width;
-const isDesktop = screenWidth >= 1024;
-const isTablet = screenWidth >= 768 && screenWidth < 1024;
+import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
+import { useAuthStore } from "@/store/authStore";
+import { getVietnamPeriodRangesUtc, formatVietnamDateTime } from "@/utils/timezone";
 
 type PeriodType = "today" | "7days" | "30days";
 
 export default function DashboardScreen() {
+  const { width: windowWidth } = useWindowDimensions();
+  const isDesktop = windowWidth >= 1024;
+  const isTablet = windowWidth >= 768 && windowWidth < 1024;
+
   const [period, setPeriod] = useState<PeriodType>("today");
-  
-  const [currentSummary, setCurrentSummary] = useState<DashboardSummaryDto | null>(null);
-  const [previousSummary, setPreviousSummary] = useState<DashboardSummaryDto | null>(null);
-  const [revenueData, setRevenueData] = useState<RevenueComparisonPointDto[] | null>(null);
-  const [topProducts, setTopProducts] = useState<TopProductDto[] | null>(null);
-  
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const reqSeqRef = useRef(0);
+
+  const navigation = useNavigation<any>();
+  const { user } = useAuthStore();
+  const role = user?.role;
+  const canCreateReceipt = user?.role === "Admin" || user?.role === "Manager" || user?.role === "WarehouseStaff";
+
+  const [summaryState, setSummaryState] = useState<{loading: boolean, error: string|null, current: DashboardSummaryDto|null, prev: DashboardSummaryDto|null}>({loading: true, error: null, current: null, prev: null});
+  const [chartState, setChartState] = useState<{loading: boolean, error: string|null, data: RevenueComparisonPointDto[]|null}>({loading: true, error: null, data: null});
+  const [topProductsState, setTopProductsState] = useState<{loading: boolean, error: string|null, data: TopProductDto[]|null}>({loading: true, error: null, data: null});
+  const [lowStockState, setLowStockState] = useState<{loading: boolean, error: string|null, data: LowStockProductDto[]|null}>({loading: true, error: null, data: null});
+  const [selectedIssueIds, setSelectedIssueIds] = useState<Set<number>>(new Set());
+  const [issueFilter, setIssueFilter] = useState<"all" | "out" | "low" | "missing_price">("all");
+
+  const allIssues = useMemo(() => lowStockState.data || [], [lowStockState.data]);
+
+  const outOfStockCount = useMemo(() => allIssues.filter(i => i.status === "Hết hàng" || i.stockQuantity <= 0).length, [allIssues]);
+  const lowStockCount = useMemo(() => allIssues.filter(i => (i.status === "Sắp hết" || (i.stockQuantity > 0 && i.stockQuantity <= (i.lowStockThreshold || 10))) && i.isSalePriceConfigured !== false).length, [allIssues]);
+  const missingPriceCount = useMemo(() => allIssues.filter(i => i.status === "Thiếu giá" || i.isSalePriceConfigured === false).length, [allIssues]);
+
+  const displayedIssues = useMemo(() => {
+    if (issueFilter === "out") return allIssues.filter(i => i.status === "Hết hàng" || i.stockQuantity <= 0);
+    if (issueFilter === "low") return allIssues.filter(i => (i.status === "Sắp hết" || (i.stockQuantity > 0 && i.stockQuantity <= (i.lowStockThreshold || 10))) && i.isSalePriceConfigured !== false);
+    if (issueFilter === "missing_price") return allIssues.filter(i => i.status === "Thiếu giá" || i.isSalePriceConfigured === false);
+    return allIssues;
+  }, [allIssues, issueFilter]);
+
+  const actionableIssues = useMemo(() => {
+    if (issueFilter === "missing_price") return [];
+    return displayedIssues.filter(i => i.stockQuantity <= (i.lowStockThreshold || 10));
+  }, [displayedIssues, issueFilter]);
+
+  const toggleSelectIssue = (id: number) => {
+    setSelectedIssueIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (actionableIssues.length === 0) return;
+    const allActionableSelected = actionableIssues.every(i => selectedIssueIds.has(i.productId));
+    if (allActionableSelected) {
+      setSelectedIssueIds(prev => {
+        const next = new Set(prev);
+        actionableIssues.forEach(i => next.delete(i.productId));
+        return next;
+      });
+    } else {
+      setSelectedIssueIds(prev => {
+        const next = new Set(prev);
+        actionableIssues.forEach(i => next.add(i.productId));
+        return next;
+      });
+    }
+  };
+
+  const handleBatchCreateReceipt = () => {
+    if (!lowStockState.data) return;
+    const selected = lowStockState.data.filter(i => selectedIssueIds.has(i.productId) && i.stockQuantity <= (i.lowStockThreshold || 10));
+    if (selected.length === 0) return;
+    navigation.navigate(role === "WarehouseStaff" ? "WarehouseInvoice" : "Invoice", {
+      tab: "imports",
+      openCreateReceipt: true,
+      prefillProducts: selected.map(i => ({
+        productId: i.productId,
+        productName: i.productName,
+        barcode: i.barcode,
+        quantity: Math.max(10, (i.lowStockThreshold || 5) * 2),
+        costPrice: 0
+      }))
+    });
+  };
 
   const getDateRanges = (p: PeriodType) => {
-    const end = new Date(); // now
-    let currentStart = new Date();
-    let prevStart = new Date();
-    let prevEnd = new Date();
-
-    if (p === "today") {
-      currentStart.setHours(0, 0, 0, 0);
-      
-      prevEnd = new Date(currentStart);
-      prevStart = new Date(currentStart);
-      prevStart.setDate(prevStart.getDate() - 1);
-    } else if (p === "7days") {
-      currentStart.setDate(end.getDate() - 7);
-      
-      prevEnd = new Date(currentStart);
-      prevStart = new Date(currentStart);
-      prevStart.setDate(prevStart.getDate() - 7);
-    } else if (p === "30days") {
-      currentStart.setDate(end.getDate() - 30);
-      
-      prevEnd = new Date(currentStart);
-      prevStart = new Date(currentStart);
-      prevStart.setDate(prevStart.getDate() - 30);
-    }
-
-    return {
-      currentStartStr: currentStart.toISOString(),
-      currentEndStr: end.toISOString(),
-      previousStartStr: prevStart.toISOString(),
-      previousEndStr: prevEnd.toISOString(),
-    };
+    return getVietnamPeriodRangesUtc(p);
   };
 
-  const loadData = async (selectedPeriod = period) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const { currentStartStr, currentEndStr, previousStartStr, previousEndStr } = getDateRanges(selectedPeriod);
+  const loadData = useCallback(async (selectedPeriod = period) => {
+    reqSeqRef.current += 1;
+    const currentSeq = reqSeqRef.current;
 
-      const [curSumRes, prevSumRes, chartRes, topRes] = await Promise.all([
-        getDashboardSummary(currentStartStr, currentEndStr),
-        getDashboardSummary(previousStartStr, previousEndStr),
-        getRevenueChartComparison(currentStartStr, currentEndStr, previousStartStr, previousEndStr),
-        getTopProducts(5, currentStartStr, currentEndStr)
-      ]);
+    setSummaryState(s => ({ ...s, loading: true, error: null }));
+    setChartState(s => ({ ...s, loading: true, error: null }));
+    setTopProductsState(s => ({ ...s, loading: true, error: null }));
+    setLowStockState(s => ({ ...s, loading: true, error: null }));
 
-      if (curSumRes.isSuccess) setCurrentSummary(curSumRes.data);
-      if (prevSumRes.isSuccess) setPreviousSummary(prevSumRes.data);
-      if (chartRes.isSuccess) setRevenueData(chartRes.data);
-      if (topRes.isSuccess) setTopProducts(topRes.data);
+    const { currentStartStr, currentEndStr, previousStartStr, previousEndStr } = getDateRanges(selectedPeriod);
 
-    } catch (e: any) {
-      console.error("[Dashboard] Fetch error:", e);
-      setError("KHÔNG THỂ TẢI DỮ LIỆU");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    // Run independently
+    Promise.allSettled([
+      getDashboardSummary(currentStartStr, currentEndStr),
+      getDashboardSummary(previousStartStr, previousEndStr)
+    ]).then(results => {
+      if (reqSeqRef.current !== currentSeq) return;
+      const curSumRes = results[0].status === 'fulfilled' ? results[0].value : null;
+      const prevSumRes = results[1].status === 'fulfilled' ? results[1].value : null;
+
+      if (!curSumRes?.isSuccess) {
+         setSummaryState(s => ({ ...s, loading: false, error: "Lỗi tải tóm tắt", current: null }));
+      } else {
+         setSummaryState({ loading: false, error: null, current: curSumRes.data, prev: prevSumRes?.isSuccess ? prevSumRes.data : null });
+      }
+    });
+
+    getRevenueChartComparison(currentStartStr, currentEndStr, previousStartStr, previousEndStr)
+      .then(res => {
+        if (reqSeqRef.current !== currentSeq) return;
+        if (res.isSuccess) setChartState({ loading: false, error: null, data: res.data });
+        else setChartState({ loading: false, error: "Lỗi biểu đồ", data: null });
+      })
+      .catch((err) => {
+        if (reqSeqRef.current !== currentSeq) return;
+        console.warn("[Dashboard] chart comparison error:", err);
+        setChartState({ loading: false, error: "Lỗi biểu đồ", data: null });
+      });
+
+    getTopProducts(5, currentStartStr, currentEndStr)
+      .then(res => {
+        if (reqSeqRef.current !== currentSeq) return;
+        if (res.isSuccess) setTopProductsState({ loading: false, error: null, data: res.data });
+        else setTopProductsState({ loading: false, error: "Lỗi top SP", data: null });
+      })
+      .catch(() => {
+        if (reqSeqRef.current !== currentSeq) return;
+        setTopProductsState({ loading: false, error: "Lỗi top SP", data: null });
+      });
+
+    getLowStockProducts(1000)
+      .then(res => {
+        if (reqSeqRef.current !== currentSeq) return;
+        if (res.isSuccess) {
+          const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+          setLowStockState({ loading: false, error: null, data: list });
+        } else {
+          setLowStockState({ loading: false, error: "Lỗi tải hàng cần xử lý", data: null });
+        }
+      })
+      .catch(() => {
+        if (reqSeqRef.current !== currentSeq) return;
+        setLowStockState({ loading: false, error: "Lỗi tải hàng cần xử lý", data: null });
+      });
+
+  }, [period]);
+
+  // Sync listen
+  const { lastSyncAt } = useGlobalSyncStore();
 
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [period])
+    }, [loadData, lastSyncAt])
   );
 
   const formatCurrency = (amount: number | null | undefined) => {
@@ -128,12 +214,15 @@ export default function DashboardScreen() {
     );
   };
 
-  if (error && !currentSummary) {
+  const currentSummary = summaryState.current;
+  const previousSummary = summaryState.prev;
+
+  if (summaryState.error && !currentSummary) {
     return (
       <SafeAreaView className="flex-1 bg-white justify-center items-center">
         <Ionicons name="alert-circle-outline" size={48} color="#000" />
-        <Text className="mt-4 font-bold" style={{ fontSize: 16 }}>{error}</Text>
-        <TouchableOpacity 
+        <Text className="mt-4 font-bold" style={{ fontSize: 16 }}>{summaryState.error}</Text>
+        <TouchableOpacity
           onPress={() => loadData()}
           className="mt-4 px-6 py-2 border-2 border-black bg-black"
         >
@@ -159,7 +248,7 @@ export default function DashboardScreen() {
   return (
     <SafeAreaView className="flex-1 bg-white">
       {/* HEADER */}
-      <View className="px-6 pt-4 pb-3 bg-white border-b-2 border-black">
+      <View className="px-4 sm:px-6 pt-4 pb-3 bg-white border-b-2 border-black">
         <Text style={{ fontFamily: 'serif', fontSize: 28, fontWeight: '900', color: '#000', letterSpacing: -0.5, textTransform: 'uppercase' }}>
           TỔNG QUAN
         </Text>
@@ -172,13 +261,13 @@ export default function DashboardScreen() {
       </View>
 
       {/* FILTER */}
-      <View className="px-6 py-3 border-b-2 border-black flex-row items-center bg-gray-50" style={{ gap: 8 }}>
+      <View className="px-4 sm:px-6 py-3 border-b-2 border-black flex-row items-center bg-gray-50" style={{ gap: 8 }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
           {(["today", "7days", "30days"] as PeriodType[]).map(p => {
             const labels: Record<string, string> = { "today": "HÔM NAY", "7days": "7 NGÀY QUA", "30days": "30 NGÀY QUA" };
             const isActive = period === p;
             return (
-              <TouchableOpacity 
+              <TouchableOpacity
                 key={p}
                 onPress={() => setPeriod(p)}
                 className={`px-4 py-2 border-[1.5px] border-black ${isActive ? 'bg-black' : 'bg-white'}`}
@@ -192,13 +281,13 @@ export default function DashboardScreen() {
         </ScrollView>
       </View>
 
-      <ScrollView 
+      <ScrollView
         className="flex-1"
-        contentContainerStyle={{ paddingBottom: 100 }}
-        refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => loadData()} tintColor="#000" />}
+        contentContainerStyle={{ paddingBottom: 110 }}
+        refreshControl={<RefreshControl refreshing={summaryState.loading} onRefresh={() => loadData()} tintColor="#000" />}
       >
-        <View className="p-6">
-          {isLoading && !currentSummary ? (
+        <View className="p-4 sm:p-6">
+          {summaryState.loading && !currentSummary ? (
             <View className="py-20 justify-center items-center">
               <ActivityIndicator size="large" color="#000" />
               <Text className="mt-4 font-bold" style={{ fontSize: 12, letterSpacing: 2 }}>ĐANG TẢI DỮ LIỆU...</Text>
@@ -243,7 +332,7 @@ export default function DashboardScreen() {
                         </Text>
                       </View>
                       <View className="mt-1">
-                        {gpChange.up === null ? 
+                        {gpChange.up === null ?
                           <Text style={{ fontSize: 11, color: '#a3a3a3' }}>- {gpChange.text}</Text> :
                           <View className="flex-row items-center">
                             <Ionicons name={gpChange.up ? "arrow-up" : "arrow-down"} size={12} color={gpChange.up ? "#4ade80" : "#f87171"} />
@@ -283,56 +372,193 @@ export default function DashboardScreen() {
                 </View>
               </View>
 
-              {/* KHU VỰC CẦN XỬ LÝ */}
+              {/* KHU VỰC CẦN XỬ LÝ (Section 9) */}
               <View className="border-[1.5px] border-black bg-white mb-6">
-                <View className="px-4 py-3 border-b-[1.5px] border-black bg-gray-50">
+                <View className="px-4 py-3 border-b-[1.5px] border-black bg-gray-50 flex-row justify-between items-center flex-wrap gap-2">
                   <Text style={{ fontSize: 12, letterSpacing: 1.5, color: '#000', textTransform: 'uppercase', fontWeight: 'bold' }}>
-                    CẦN XỬ LÝ
+                    DANH SÁCH CẦN XỬ LÝ
                   </Text>
+                  {canCreateReceipt && selectedIssueIds.size > 0 && (
+                    <TouchableOpacity
+                      onPress={handleBatchCreateReceipt}
+                      className="bg-black px-3 py-1.5 border border-black flex-row items-center"
+                    >
+                      <Ionicons name="cart-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
+                      <Text className="text-white text-xs font-bold uppercase">
+                        Lập phiếu nhập các mặt hàng đã chọn ({selectedIssueIds.size})
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View className={`flex-row flex-wrap p-4`} style={{ gap: 16 }}>
-                  {(!currentSummary || (currentSummary.outOfStockSKUs === 0 && currentSummary.lowStockSKUs === 0 && currentSummary.pendingOrders === 0)) ? (
-                    <View className="w-full py-4 items-center">
-                      <Text style={{ fontSize: 13, color: '#525252', fontWeight: 'bold' }}>KHÔNG CÓ VẤN ĐỀ CẦN XỬ LÝ</Text>
-                      <Text style={{ fontSize: 11, color: '#a3a3a3', marginTop: 4 }}>Dữ liệu được kiểm tra lúc {new Date().toLocaleTimeString('vi-VN', {hour: '2-digit', minute: '2-digit'})}</Text>
+
+                {/* 4 Filter Tabs */}
+                <View className="flex-row flex-wrap p-4 border-b border-gray-200" style={{ gap: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => setIssueFilter("all")}
+                    className={`px-3 py-1.5 border-[1.5px] border-black ${issueFilter === "all" ? "bg-black" : "bg-white"}`}
+                  >
+                    <Text className={`text-xs font-bold uppercase ${issueFilter === "all" ? "text-white" : "text-black"}`}>
+                      Tất cả ({allIssues.length})
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setIssueFilter("out")}
+                    className={`px-3 py-1.5 border-[1.5px] border-black ${issueFilter === "out" ? "bg-black" : "bg-white"}`}
+                  >
+                    <Text className={`text-xs font-bold uppercase ${issueFilter === "out" ? "text-white" : "text-black"}`}>
+                      Hết hàng ({outOfStockCount})
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setIssueFilter("low")}
+                    className={`px-3 py-1.5 border-[1.5px] border-black ${issueFilter === "low" ? "bg-black" : "bg-white"}`}
+                  >
+                    <Text className={`text-xs font-bold uppercase ${issueFilter === "low" ? "text-white" : "text-black"}`}>
+                      Sắp hết ({lowStockCount})
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setIssueFilter("missing_price")}
+                    className={`px-3 py-1.5 border-[1.5px] border-black ${issueFilter === "missing_price" ? "bg-black" : "bg-white"}`}
+                  >
+                    <Text className={`text-xs font-bold uppercase ${issueFilter === "missing_price" ? "text-white" : "text-black"}`}>
+                      Thiếu giá ({missingPriceCount})
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Detailed List */}
+                <View className="p-4">
+                  {lowStockState.loading ? (
+                    <View className="py-6 justify-center items-center">
+                      <ActivityIndicator color="#000" />
+                      <Text className="mt-2 text-xs text-gray-500 font-bold">ĐANG TẢI DANH SÁCH CẦN XỬ LÝ...</Text>
+                    </View>
+                  ) : displayedIssues.length === 0 ? (
+                    <View className="py-6 items-center">
+                      <Ionicons name="checkmark-circle-outline" size={32} color="#16a34a" />
+                      <Text style={{ fontSize: 13, color: '#16a34a', fontWeight: 'bold', marginTop: 4 }}>
+                        KHÔNG CÓ MẶT HÀNG NÀO TRONG NHÓM NÀY
+                      </Text>
                     </View>
                   ) : (
-                    <>
-                      {currentSummary.outOfStockSKUs > 0 && (
-                        <View className="flex-row items-center border-[1.5px] border-red-600 bg-red-50 p-3 flex-1 min-w-[200px]">
-                          <Ionicons name="warning-outline" size={24} color="#dc2626" />
-                          <View className="ml-3">
-                            <Text className="font-black text-red-600" style={{ fontSize: 18 }}>{currentSummary.outOfStockSKUs}</Text>
-                            <Text style={{ fontSize: 11, color: '#dc2626', fontWeight: 'bold' }}>SẢN PHẨM HẾT HÀNG</Text>
-                          </View>
+                    <View>
+                      {/* Select all header */}
+                      {canCreateReceipt && actionableIssues.length > 0 && (
+                        <View className="flex-row items-center justify-between pb-2 mb-2 border-b border-gray-200">
+                          <TouchableOpacity onPress={toggleSelectAll} className="flex-row items-center">
+                            <Ionicons
+                              name={actionableIssues.every(i => selectedIssueIds.has(i.productId)) ? "checkbox" : "square-outline"}
+                              size={18}
+                              color="#000"
+                            />
+                            <Text className="ml-2 text-xs font-bold text-black">
+                              Chọn tất cả ({actionableIssues.length})
+                            </Text>
+                          </TouchableOpacity>
                         </View>
                       )}
-                      {currentSummary.lowStockSKUs > 0 && (
-                        <View className="flex-row items-center border-[1.5px] border-orange-500 bg-orange-50 p-3 flex-1 min-w-[200px]">
-                          <Ionicons name="alert-circle-outline" size={24} color="#f97316" />
-                          <View className="ml-3">
-                            <Text className="font-black text-orange-600" style={{ fontSize: 18 }}>{currentSummary.lowStockSKUs}</Text>
-                            <Text style={{ fontSize: 11, color: '#ea580c', fontWeight: 'bold' }}>SẢN PHẨM SẮP HẾT</Text>
-                          </View>
-                        </View>
-                      )}
-                      {currentSummary.pendingOrders > 0 && (
-                        <View className="flex-row items-center border-[1.5px] border-black bg-white p-3 flex-1 min-w-[200px]">
-                          <Ionicons name="time-outline" size={24} color="#000" />
-                          <View className="ml-3">
-                            <Text className="font-black text-black" style={{ fontSize: 18 }}>{currentSummary.pendingOrders}</Text>
-                            <Text style={{ fontSize: 11, color: '#000', fontWeight: 'bold' }}>ĐƠN ĐANG CHỜ HIỆN TẠI</Text>
-                          </View>
-                        </View>
-                      )}
-                    </>
+
+                      {/* Scrollable Container */}
+                      <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={true} nestedScrollEnabled={true}>
+                        {displayedIssues.map((item, idx) => {
+                          const isOut = item.stockQuantity <= 0;
+                          const isMissingPrice = item.isSalePriceConfigured === false || item.status === "Thiếu giá";
+                          const isSelected = selectedIssueIds.has(item.productId);
+                          const isActionable = item.stockQuantity <= (item.lowStockThreshold || 10);
+                          return (
+                            <View
+                              key={item.productId || idx}
+                              className="flex-row flex-wrap items-center justify-between py-3 border-b border-gray-200"
+                              style={{ gap: 8 }}
+                            >
+                              <View className="flex-row items-center flex-1 min-w-[200px]">
+                                {canCreateReceipt && isActionable && (
+                                  <TouchableOpacity onPress={() => toggleSelectIssue(item.productId)} className="mr-3">
+                                    <Ionicons
+                                      name={isSelected ? "checkbox" : "square-outline"}
+                                      size={20}
+                                      color="#000"
+                                    />
+                                  </TouchableOpacity>
+                                )}
+                                <View className="flex-1">
+                                  <View className="flex-row items-center flex-wrap">
+                                    <Text className="font-bold text-sm text-black">{item.productName}</Text>
+                                    {isMissingPrice ? (
+                                      <View className="ml-2 px-2 py-0.5 border bg-amber-100 border-amber-500">
+                                        <Text className="text-[10px] font-bold text-amber-700">
+                                          THIẾU GIÁ
+                                        </Text>
+                                      </View>
+                                    ) : (
+                                      <View className={`ml-2 px-2 py-0.5 border ${isOut ? 'bg-red-100 border-red-500' : 'bg-orange-100 border-orange-500'}`}>
+                                        <Text className={`text-[10px] font-bold ${isOut ? 'text-red-700' : 'text-orange-700'}`}>
+                                          {isOut ? "HẾT HÀNG" : "SẮP HẾT"}
+                                        </Text>
+                                      </View>
+                                    )}
+                                  </View>
+                                  <View className="flex-row items-center mt-1 flex-wrap">
+                                    <Text className="text-xs text-gray-500 mr-3">Mã: <Text className="font-mono text-black font-semibold">{item.barcode || 'Chưa có'}</Text></Text>
+                                    <Text className="text-xs text-gray-500 mr-3">Tồn: <Text className={`font-bold ${isOut ? 'text-red-600' : 'text-orange-600'}`}>{item.stockQuantity}</Text> (Ngưỡng: {item.lowStockThreshold})</Text>
+                                    <Text className="text-xs text-gray-500">NCC: <Text className="text-black font-semibold">{item.supplierName || 'Chưa có'}</Text></Text>
+                                  </View>
+                                </View>
+                              </View>
+
+                              <View className="flex-row items-center" style={{ gap: 8 }}>
+                                <TouchableOpacity
+                                  onPress={() => {
+                                    (navigation as any).navigate("Inventory", {
+                                      tab: "products",
+                                      targetProductId: item.productId,
+                                      targetBarcode: item.barcode,
+                                      focusField: isMissingPrice ? "price" : (isOut ? "price" : "lowStockThreshold")
+                                    });
+                                  }}
+                                  className="border border-black px-3 py-1.5 bg-white"
+                                  accessibilityLabel={`Xem chi tiết sản phẩm ${item.productName}`}
+                                >
+                                  <Text className="text-xs font-bold text-black uppercase">
+                                    {isMissingPrice ? "CẬP NHẬT GIÁ" : "XEM"}
+                                  </Text>
+                                </TouchableOpacity>
+
+                                {canCreateReceipt && isActionable && (
+                                  <TouchableOpacity
+                                    onPress={() => {
+                                      navigation.navigate(role === "WarehouseStaff" ? "WarehouseInvoice" : "Invoice", {
+                                        tab: "imports",
+                                        openCreateReceipt: true,
+                                        prefillProducts: [{
+                                          productId: item.productId,
+                                          productName: item.productName,
+                                          barcode: item.barcode,
+                                          quantity: Math.max(10, (item.lowStockThreshold || 5) * 2),
+                                          costPrice: 0
+                                        }]
+                                      });
+                                    }}
+                                    className="border border-black px-3 py-1.5 bg-black"
+                                    accessibilityLabel={`Thêm vào phiếu nhập ${item.productName}`}
+                                  >
+                                    <Text className="text-xs font-bold text-white uppercase">Thêm vào phiếu nhập</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
                   )}
                 </View>
               </View>
 
               {/* CHART & WAREHOUSE OVERVIEW */}
               <View className={isDesktop ? "flex-row" : "flex-col"} style={{ gap: 16, marginBottom: 24 }}>
-                
+
                 {/* CHART */}
                 <View className={`border-[1.5px] border-black bg-white ${isDesktop ? 'flex-[7]' : 'w-full'}`}>
                   <View className="px-4 py-3 border-b-[1.5px] border-black bg-gray-50">
@@ -341,7 +567,16 @@ export default function DashboardScreen() {
                     </Text>
                   </View>
                   <View className="p-4 items-center">
-                    {(!revenueData || revenueData.filter(d => d.currentPeriodRevenue > 0 || d.previousPeriodRevenue > 0).length === 0) ? (
+                    {chartState.loading ? (
+                      <View className="h-[300px] justify-center items-center">
+                        <ActivityIndicator color="#000" />
+                        <Text className="mt-2 text-xs font-bold text-gray-500 tracking-widest">ĐANG TẢI BIỂU ĐỒ...</Text>
+                      </View>
+                    ) : chartState.error ? (
+                      <View className="h-[300px] justify-center items-center">
+                        <Text style={{ fontSize: 13, color: '#dc2626', fontWeight: 'bold' }}>{chartState.error}</Text>
+                      </View>
+                    ) : (!chartState.data || chartState.data.filter(d => d.currentPeriodRevenue > 0 || d.previousPeriodRevenue > 0).length === 0) ? (
                       <View className="h-[300px] justify-center items-center">
                         <Text style={{ fontSize: 13, color: '#000', fontWeight: 'bold' }}>CHƯA PHÁT SINH GIAO DỊCH</Text>
                         <Text style={{ fontSize: 11, color: '#525252', marginTop: 4 }}>Dữ liệu bán hàng trong khoảng thời gian này sẽ xuất hiện tại đây.</Text>
@@ -349,22 +584,22 @@ export default function DashboardScreen() {
                     ) : (
                       <LineChart
                         data={{
-                          labels: revenueData.map(d => d.label),
+                          labels: chartState.data.map(d => d.label),
                           datasets: [
                             {
-                              data: revenueData.map(d => d.previousPeriodRevenue),
-                              color: (opacity = 1) => `rgba(156, 163, 175, 1)`, // gray-400 dashed effect not fully supported, but we use gray color
+                              data: chartState.data.map(d => d.previousPeriodRevenue),
+                              color: (opacity = 1) => `rgba(156, 163, 175, 1)`,
                               strokeWidth: 2,
                             },
                             {
-                              data: revenueData.map(d => d.currentPeriodRevenue),
+                              data: chartState.data.map(d => d.currentPeriodRevenue),
                               color: (opacity = 1) => `rgba(0, 0, 0, 1)`,
                               strokeWidth: 3,
                             }
                           ],
                           legend: ["Kỳ trước", "Kỳ hiện tại"]
                         }}
-                        width={(isDesktop ? (screenWidth * 0.7) : screenWidth) - 80}
+                        width={Math.max(300, (isDesktop ? (windowWidth * 0.7) : windowWidth) - 80)}
                         height={300}
                         yAxisLabel=""
                         yAxisSuffix=" ₫"
@@ -398,28 +633,28 @@ export default function DashboardScreen() {
                         <Text style={{ fontSize: 10, color: '#a16207' }}>Thiếu giá vốn cho {currentSummary.missingCostInventoryProductCount} sản phẩm.</Text>
                       </View>
                     )}
-                    
+
                     <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
                       <Text style={{ fontSize: 13, color: '#525252' }}>Giá trị tồn kho</Text>
                       <Text className="font-black text-black" style={{ fontSize: 14 }}>
-                        {currentSummary?.totalInventoryValue !== null ? formatCurrency(currentSummary?.totalInventoryValue) : 'N/A'}
+                        {formatCurrency(currentSummary?.totalInventoryValue || 0)}
                       </Text>
                     </View>
 
                     <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>SKU ĐANG TỒN</Text>
+                      <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng còn hàng</Text>
                       <Text className="font-bold text-black" style={{ fontSize: 14 }}>{currentSummary?.totalSKUs || 0}</Text>
                     </View>
 
                     <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>SKU hết hàng</Text>
+                      <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng hết hàng</Text>
                       <Text className={`font-bold ${currentSummary?.outOfStockSKUs ? 'text-red-600' : 'text-black'}`} style={{ fontSize: 14 }}>
                         {currentSummary?.outOfStockSKUs || 0}
                       </Text>
                     </View>
 
                     <View className="flex-row justify-between pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>SKU sắp hết</Text>
+                      <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng sắp hết</Text>
                       <Text className={`font-bold ${currentSummary?.lowStockSKUs ? 'text-orange-500' : 'text-black'}`} style={{ fontSize: 14 }}>
                         {currentSummary?.lowStockSKUs || 0}
                       </Text>
@@ -434,10 +669,18 @@ export default function DashboardScreen() {
                   <Text style={{ fontSize: 12, letterSpacing: 1.5, color: '#000', textTransform: 'uppercase', fontWeight: 'bold' }}>
                     TOP SẢN PHẨM BÁN CHẠY
                   </Text>
-                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#000', textDecorationLine: 'underline' }}>XEM TẤT CẢ</Text>
                 </View>
 
-                {(!topProducts || topProducts.length === 0) ? (
+                {topProductsState.loading ? (
+                  <View className="py-10 justify-center items-center">
+                    <ActivityIndicator color="#000" />
+                    <Text className="mt-2 text-xs font-bold text-gray-500 tracking-widest">ĐANG TẢI TOP SẢN PHẨM...</Text>
+                  </View>
+                ) : topProductsState.error ? (
+                  <View className="py-10 justify-center items-center">
+                    <Text style={{ fontSize: 13, color: '#dc2626', fontWeight: 'bold' }}>{topProductsState.error}</Text>
+                  </View>
+                ) : (!topProductsState.data || topProductsState.data.length === 0) ? (
                   <View className="py-10 justify-center items-center">
                     <Text style={{ fontSize: 13, color: '#525252', fontWeight: 'bold' }}>CHƯA CÓ DỮ LIỆU SẢN PHẨM BÁN RA</Text>
                   </View>
@@ -453,7 +696,7 @@ export default function DashboardScreen() {
                           <Text className="font-bold flex-[1.5] text-right" style={{ fontSize: 11 }}>Doanh thu</Text>
                           <Text className="font-bold flex-[1] text-right" style={{ fontSize: 11 }}>Tồn kho</Text>
                         </View>
-                        {topProducts.map((p, idx) => (
+                        {topProductsState.data.map((p, idx) => (
                           <View key={p.productId} className="flex-row px-4 py-3 border-b border-gray-200 items-center">
                             <Text className="font-bold flex-[0.5] text-gray-500" style={{ fontSize: 12 }}>{idx + 1}</Text>
                             <View className="flex-[3]">
@@ -476,7 +719,7 @@ export default function DashboardScreen() {
                     ) : (
                       // CARD LIST FOR MOBILE
                       <View className="px-4 py-2">
-                        {topProducts.map((p, idx) => (
+                        {topProductsState.data.map((p, idx) => (
                           <View key={p.productId} className="py-3 border-b border-gray-200">
                             <View className="flex-row justify-between mb-1">
                               <View className="flex-1 flex-row pr-2">

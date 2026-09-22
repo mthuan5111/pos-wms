@@ -42,11 +42,25 @@ export interface RevenueComparisonPointDto {
   previousPeriodRevenue: number;
 }
 
+export interface LowStockProductDto {
+  productId: number;
+  productName: string;
+  barcode: string;
+  stockQuantity: number;
+  lowStockThreshold: number;
+  categoryName: string;
+  supplierName: string;
+  status: string;
+  lastReceiptDate?: string;
+  isSalePriceConfigured?: boolean;
+  price?: number;
+}
+
 export const getDashboardSummary = async (startDate?: string, endDate?: string) => {
   const params = new URLSearchParams();
   if (startDate) params.append("startDate", startDate);
   if (endDate) params.append("endDate", endDate);
-  
+
   const response = await apiClient.get(`/Reports/summary?${params.toString()}`);
   return response.data; // Usually wrapped in ApiResponse
 };
@@ -77,15 +91,33 @@ export const getRevenueChartComparison = async (currentStart: string, currentEnd
   params.append("previousStart", previousStart);
   params.append("previousEnd", previousEnd);
 
-  const response = await apiClient.get(`/Reports/revenue-chart-comparison?${params.toString()}`);
-  return response.data;
+  try {
+    const response = await apiClient.get(`/Reports/revenue-chart-comparison?${params.toString()}`);
+    return response.data;
+  } catch (err: any) {
+    if (err?.response?.status === 404) {
+      try {
+        const fallbackRes = await apiClient.get(`/Reports/revenue-chart?startDate=${currentStart}&endDate=${currentEnd}`);
+        const chartList = Array.isArray(fallbackRes.data?.data) ? fallbackRes.data.data : [];
+        const mappedData = chartList.map((item: any) => ({
+          label: item.date || item.label || '',
+          currentPeriodRevenue: item.revenue || item.total || 0,
+          previousPeriodRevenue: 0
+        }));
+        return { isSuccess: true, data: mappedData };
+      } catch {
+        return { isSuccess: true, data: [] };
+      }
+    }
+    throw err;
+  }
 };
 
 export const getPurchaseSummary = async (startDate?: string, endDate?: string) => {
   const params = new URLSearchParams();
   if (startDate) params.append("startDate", startDate);
   if (endDate) params.append("endDate", endDate);
-  
+
   const response = await apiClient.get(`/Reports/purchase-summary?${params.toString()}`);
   return response.data;
 };

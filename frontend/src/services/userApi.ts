@@ -24,6 +24,11 @@ export const resetUserPassword = async (id: number, newPassword: string) => {
   return response.data;
 };
 
+export const changeUserPassword = async (id: number, currentPassword: string, newPassword: string) => {
+  const response = await apiClient.put(`/Users/${id}/change-password`, { currentPassword, newPassword });
+  return response.data;
+};
+
 export const toggleUserStatus = async (id: number) => {
   const response = await apiClient.put(`/Users/${id}/toggle-status`);
   return response.data;
