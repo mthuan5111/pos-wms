@@ -38,7 +38,15 @@ export default function RootNavigator() {
     };
 
     return (
-        <NavigationContainer>
+        <NavigationContainer
+            documentTitle={{
+                enabled: true,
+                formatter: (options, route) => {
+                    const title = options?.title ?? route?.name;
+                    return title ? `${title} | POS-WMS` : "POS-WMS - Quản Lý Bán Hàng & Kho";
+                },
+            }}
+        >
             {renderContent()}
         </NavigationContainer>
     );

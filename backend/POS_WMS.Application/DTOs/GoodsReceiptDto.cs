@@ -12,7 +12,7 @@ namespace POS_WMS.Application.DTOs
         public int UserId { get; set; }
         public string UserName { get; set; } = string.Empty;
         public DateTime ReceiptDate { get; set; }
-        public decimal TotalAmount { get; set; }
+        public decimal? TotalAmount { get; set; }
         public string Remarks { get; set; } = string.Empty;
         public string? OfflineReferenceId { get; set; }
         public string SyncStatus { get; set; } = "Synced";
@@ -28,8 +28,8 @@ namespace POS_WMS.Application.DTOs
         public string ProductName { get; set; } = string.Empty;
         public string Barcode { get; set; } = string.Empty;
         public int Quantity { get; set; }
-        public decimal CostPrice { get; set; }
-        public decimal Subtotal => Quantity * CostPrice;
+        public decimal? CostPrice { get; set; }
+        public decimal? Subtotal => CostPrice.HasValue ? Quantity * CostPrice.Value : null;
     }
 
     public class CreateGoodsReceiptRequestDto

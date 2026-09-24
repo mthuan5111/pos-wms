@@ -162,6 +162,7 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.Price).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.CostPrice).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.ImageUrl).HasMaxLength(1000);
+            entity.Property(e => e.ImagePublicId).HasMaxLength(255);
             entity.Property(e => e.DeactivationReason).HasMaxLength(500);
             entity.HasIndex(e => e.Barcode).IsUnique();
             // Requirement 7A.B.2: Uniqueness of normalized product name scoped to category
@@ -226,8 +227,10 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.MovementType).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.ReferenceType).IsRequired().HasMaxLength(50);
             entity.Property(e => e.CreatedBy).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.OfflineReferenceId).HasMaxLength(100);
             entity.HasIndex(e => e.ProductId);
             entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => e.OfflineReferenceId).IsUnique().HasFilter("[OfflineReferenceId] IS NOT NULL");
         });
 
         modelBuilder.Entity<GoodsReceipt>()

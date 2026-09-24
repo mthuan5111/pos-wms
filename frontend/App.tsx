@@ -12,6 +12,9 @@ export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
 
   useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title = "POS-WMS - Quản Lý Bán Hàng & Kho";
+    }
     async function setupDatabase() {
       try {
         await initLocalDatabase();

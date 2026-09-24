@@ -21,6 +21,7 @@ export interface LocalProductRow {
   Barcode: string;
   StockQuantity: number;
   ImageUrl?: string;
+  ImagePublicId?: string | null;
   LowStockThreshold?: number;
   IsSalePriceConfigured?: number;
 }
@@ -92,39 +93,44 @@ export const initLocalDatabase = async () => {
 };
 
 import { calculateEffectiveStock } from "@/utils/calculator";
+import { isDemoRole, isDemoUser } from "@/utils/roleUtils";
 export { calculateEffectiveStock };
+
+export const hasCachedMasterData = async (): Promise<boolean> => {
+  try {
+    const db = await getDBConnection();
+    const row = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM LocalProducts;");
+    return (row?.count ?? 0) > 0;
+  } catch {
+    return false;
+  }
+};
 
 export const pullMasterData = async (role: string = "Admin"): Promise<{ failedModules: string[]; hasRequiredError: boolean }> => {
   try {
     const db = await getDBConnection();
     console.log(`[DB] Đang tải Master Data cho role: ${role}...`);
 
-    const needsPos = ["Admin", "Manager", "Cashier", "WarehouseStaff"].includes(role);
-    const needsCustomer = ["Admin", "Manager", "Cashier"].includes(role);
-    const needsSupplier = ["Admin", "Manager", "WarehouseStaff"].includes(role);
+    const isDemo = isDemoRole(role) || isDemoUser(role);
+    const needsPos = ["Admin", "Manager", "Cashier", "WarehouseStaff", "DemoUser", "Demo"].includes(role);
+    const needsCustomer = ["Admin", "Manager", "Cashier"].includes(role) && !isDemo;
+    const needsSupplier = ["Admin", "Manager", "WarehouseStaff", "DemoUser", "Demo"].includes(role);
 
     let failedModules: string[] = [];
     let hasRequiredError = false;
 
-    const fetchSafe = async (url: string, moduleName: string, isRequired: boolean, fallbackUrl?: string) => {
+    const fetchSafe = async (url: string, moduleName: string, isRequired: boolean) => {
       try {
         const res = await apiClient.get(url);
         return res.data?.data || res.data || [];
       } catch (e: any) {
-        if (fallbackUrl && (e.response?.status === 404 || !e.response)) {
-          try {
-            console.log(`[DB] Fallback ${url} -> ${fallbackUrl}`);
-            const fb = await apiClient.get(fallbackUrl);
-            return fb.data?.data || fb.data || [];
-          } catch (f: any) {
-            console.warn(`[DB] Fallback ${fallbackUrl} failed:`, f.message);
-          }
+        if (e.response?.status === 403) {
+          console.warn(`[DB] Quyền truy cập bị từ chối (403) đối với ${url} (role: ${role}). Bỏ qua có kiểm soát.`);
+          return null;
         }
-        if (e.response?.status !== 403) {
-          failedModules.push(moduleName);
-          if (isRequired) hasRequiredError = true;
-          console.error(`Lỗi get ${url}:`, e.message);
-        }
+        failedModules.push(moduleName);
+        if (isRequired) hasRequiredError = true;
+        console.error(`Lỗi get ${url}:`, e.message);
         return null;
       }
     };
@@ -133,8 +139,8 @@ export const pullMasterData = async (role: string = "Admin"): Promise<{ failedMo
       needsPos ? fetchSafe("/Categories", "Danh mục", true) : Promise.resolve(null),
       needsPos ? fetchSafe("/Products", "Sản phẩm", true) : Promise.resolve(null),
       needsPos ? fetchSafe("/Inventories", "Tồn kho", true) : Promise.resolve(null),
-      needsCustomer ? fetchSafe("/Customers", "Khách hàng", false, "/Customer") : Promise.resolve(null),
-      needsSupplier ? fetchSafe("/Suppliers", "Nhà cung cấp", false, "/Supplier") : Promise.resolve(null),
+      needsCustomer ? fetchSafe("/Customers", "Khách hàng", false) : Promise.resolve(null),
+      needsSupplier ? fetchSafe("/Suppliers", "Nhà cung cấp", false) : Promise.resolve(null),
     ]);
 
     await db.execAsync("PRAGMA foreign_keys = OFF;");
@@ -225,11 +231,12 @@ export const pullMasterData = async (role: string = "Admin"): Promise<{ failedMo
           );
 
           let imageUri = p.imageUrl || null;
+          let imagePublicId = p.imagePublicId || p.ImagePublicId || null;
           const threshold = p.lowStockThreshold ?? p.LowStockThreshold ?? 10;
           const isConfigured = (p.isSalePriceConfigured !== false && p.IsSalePriceConfigured !== false) ? 1 : 0;
           await db.runAsync(
-            "INSERT OR REPLACE INTO LocalProducts (Id, CategoryId, SupplierId, Name, Price, Barcode, StockQuantity, ImageUrl, LowStockThreshold, IsSalePriceConfigured) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [pIdStr, p.categoryId || 1, p.supplierId ?? null, p.name, p.price, p.barcode, effectiveStock, imageUri, threshold, isConfigured]
+            "INSERT OR REPLACE INTO LocalProducts (Id, CategoryId, SupplierId, Name, Price, Barcode, StockQuantity, ImageUrl, ImagePublicId, LowStockThreshold, IsSalePriceConfigured) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [pIdStr, p.categoryId || 1, p.supplierId ?? null, p.name, p.price, p.barcode, effectiveStock, imageUri, imagePublicId, threshold, isConfigured]
           );
         }
 
@@ -269,13 +276,14 @@ export const insertLocalProduct = async (
   imageUrl?: string,
   supplierId?: number | null,
   lowStockThreshold: number = 10,
-  isSalePriceConfigured: boolean = true
+  isSalePriceConfigured: boolean = true,
+  imagePublicId?: string | null
 ) => {
   try {
     const db = await getDBConnection();
     await db.runAsync(
-      "INSERT OR REPLACE INTO LocalProducts (Id, CategoryId, SupplierId, Name, Price, Barcode, StockQuantity, ImageUrl, LowStockThreshold, IsSalePriceConfigured) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [id, categoryId, supplierId ?? null, name, price, barcode, stock, imageUrl || null, lowStockThreshold, isSalePriceConfigured ? 1 : 0]
+      "INSERT OR REPLACE INTO LocalProducts (Id, CategoryId, SupplierId, Name, Price, Barcode, StockQuantity, ImageUrl, ImagePublicId, LowStockThreshold, IsSalePriceConfigured) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, categoryId, supplierId ?? null, name, price, barcode, stock, imageUrl || null, imagePublicId || null, lowStockThreshold, isSalePriceConfigured ? 1 : 0]
     );
   } catch (error) {
     console.error("Lỗi khi thêm sản phẩm local:", error);

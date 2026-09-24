@@ -21,6 +21,8 @@ import { ShiftReportDto } from '@/services/shiftApi';
 import { useGlobalSyncStore } from '@/store/useGlobalSyncStore';
 import { generateShiftReportHtml } from '@/utils/printTemplates';
 import { printDocument } from '@/utils/printService';
+import { useDemoSandboxStore } from '@/store/useDemoSandboxStore';
+import { getRoleDisplayName, isDemoRole } from '@/utils/roleUtils';
 
 export default function StatisticsScreen() {
   const user = useAuthStore((state) => state.user);
@@ -70,9 +72,77 @@ export default function StatisticsScreen() {
 
   const formatCurrency = (val: number) => (val || 0).toLocaleString('vi-VN') + ' đ';
 
+  const isDemo = isDemoRole(role);
+  const demoShift = useDemoSandboxStore((state) => state.activeShift);
+
   const loadData = async () => {
     setIsLoading(true);
     try {
+      if (isDemo) {
+        const sessionId = await useDemoSandboxStore.getState().initSession();
+        const db = await getDBConnection();
+
+        const sOrders = await db.getAllAsync<any>(
+          'SELECT * FROM DemoSandboxOrders WHERE SessionId = ? ORDER BY CreatedAt DESC',
+          [sessionId]
+        );
+
+        let rev = 0;
+        let cashAmt = 0;
+        let qrAmt = 0;
+        sOrders.forEach(o => {
+          rev += Number(o.TotalAmount || 0);
+          if (String(o.PaymentMethod).toUpperCase().includes('QR')) {
+            qrAmt += Number(o.TotalAmount || 0);
+          } else {
+            cashAmt += Number(o.TotalAmount || 0);
+          }
+        });
+
+        const unsyncedOrders = sOrders.filter(o => o.IsSynced === 0);
+        setCashierOrders(sOrders);
+        setCashierStats({
+          totalRevenue: rev,
+          orderCount: sOrders.length,
+          cashAmount: cashAmt,
+          qrAmount: qrAmt,
+          canceledCount: 0,
+          unsyncedCount: unsyncedOrders.length,
+        });
+
+        const sReceipts = await db.getAllAsync<any>(
+          'SELECT * FROM DemoSandboxGoodsReceipts WHERE SessionId = ?',
+          [sessionId]
+        );
+        const sAdjustments = await db.getAllAsync<any>(
+          'SELECT * FROM DemoSandboxStockAdjustments WHERE SessionId = ?',
+          [sessionId]
+        );
+
+        let sReceiptVal = 0;
+        sReceipts.forEach(r => sReceiptVal += Number(r.TotalAmount || 0));
+
+        let inc = 0;
+        let dec = 0;
+        sAdjustments.forEach(a => {
+          if (a.Delta > 0) inc += a.Delta;
+          else if (a.Delta < 0) dec += Math.abs(a.Delta);
+        });
+
+        setWarehouseStats({
+          receiptCount: sReceipts.length,
+          totalReceiptValue: sReceiptVal,
+          totalQty: sReceipts.length,
+          adjustmentCount: sAdjustments.length,
+          totalQtyIncrease: inc,
+          totalQtyDecrease: dec,
+          unsyncedReceipts: sReceipts.filter(r => r.IsSynced === 0).length,
+        });
+
+        setIsLoading(false);
+        return;
+      }
+
       const activeShift = await fetchCurrentShift();
       const shiftStartTime = activeShift?.startedAt ? new Date(activeShift.startedAt).getTime() : 0;
       const activeShiftId = activeShift?.id || (activeShift as any)?.Id;
@@ -170,6 +240,17 @@ export default function StatisticsScreen() {
     isShiftActionRef.current = true;
     try {
       setIsLoading(true);
+      if (isDemo) {
+        await useDemoSandboxStore.getState().openShift();
+        setShowOpenShiftModal(false);
+        showModal({
+          title: 'Mở ca trải nghiệm',
+          message: 'Ca làm việc thử nghiệm mới đã được bắt đầu trong Demo Sandbox.',
+          type: 'success'
+        });
+        await loadData();
+        return;
+      }
       await openShift();
       setShowOpenShiftModal(false);
       showModal({
@@ -190,8 +271,8 @@ export default function StatisticsScreen() {
     }
   };
 
-  const hasActiveShift = Boolean(currentShift && (currentShift.id || (currentShift as any)?.Id));
-  const shiftId = currentShift?.id || (currentShift as any)?.Id;
+  const hasActiveShift = isDemo ? Boolean(demoShift) : Boolean(currentShift && (currentShift.id || (currentShift as any)?.Id));
+  const shiftId = isDemo ? (demoShift?.shiftCode || 'DEMO-SHIFT') : (currentShift?.id || (currentShift as any)?.Id);
 
   const handleStartEndShiftFlow = async () => {
     if (!hasActiveShift) {
@@ -205,6 +286,34 @@ export default function StatisticsScreen() {
 
     try {
       setIsLoading(true);
+      if (isDemo) {
+        const preview: ShiftReportDto = {
+          shiftId: shiftId,
+          userId: user?.id || 0,
+          userName: 'Khách Trải Nghiệm',
+          role: 'DemoUser',
+          startedAt: demoShift?.startedAt || new Date().toISOString(),
+          status: 'Open',
+          orderCount: cashierStats.orderCount,
+          completedOrderCount: cashierStats.orderCount,
+          canceledOrderCount: cashierStats.canceledCount,
+          cashRevenue: cashierStats.cashAmount,
+          qrRevenue: cashierStats.qrAmount,
+          totalRevenue: cashierStats.totalRevenue,
+          pendingSyncCount: cashierStats.unsyncedCount,
+          receiptCount: warehouseStats.receiptCount,
+          totalReceiptAmount: warehouseStats.totalReceiptValue,
+          receiptQuantityTotal: warehouseStats.totalQty,
+          adjustmentIncreaseCount: 0,
+          adjustmentIncreaseQuantity: warehouseStats.totalQtyIncrease,
+          adjustmentDecreaseCount: 0,
+          adjustmentDecreaseQuantity: warehouseStats.totalQtyDecrease,
+        };
+        setReportData(preview);
+        setShowShiftSummaryModal(true);
+        return;
+      }
+
       // Fetch reconciled server preview
       let preview: ShiftReportDto;
       try {
@@ -254,6 +363,42 @@ export default function StatisticsScreen() {
 
     try {
       setIsLoading(true);
+      if (isDemo) {
+        const closedShift = await useDemoSandboxStore.getState().closeShift(0);
+        const closedReport: ShiftReportDto = {
+          shiftId: closedShift?.shiftCode || shiftId,
+          userId: user?.id || 0,
+          userName: 'Khách Trải Nghiệm',
+          role: 'DemoUser',
+          startedAt: closedShift?.startedAt || demoShift?.startedAt || new Date().toISOString(),
+          endedAt: closedShift?.endedAt || new Date().toISOString(),
+          status: 'Closed',
+          orderCount: cashierStats.orderCount,
+          completedOrderCount: cashierStats.orderCount,
+          canceledOrderCount: cashierStats.canceledCount,
+          cashRevenue: cashierStats.cashAmount,
+          qrRevenue: cashierStats.qrAmount,
+          totalRevenue: cashierStats.totalRevenue,
+          pendingSyncCount: cashierStats.unsyncedCount,
+          receiptCount: warehouseStats.receiptCount,
+          totalReceiptAmount: warehouseStats.totalReceiptValue,
+          receiptQuantityTotal: warehouseStats.totalQty,
+          adjustmentIncreaseCount: 0,
+          adjustmentIncreaseQuantity: warehouseStats.totalQtyIncrease,
+          adjustmentDecreaseCount: 0,
+          adjustmentDecreaseQuantity: warehouseStats.totalQtyDecrease,
+        };
+        setReportData(closedReport);
+        showModal({
+          title: 'Đã kết thúc ca trải nghiệm',
+          message: 'Ca làm việc thử nghiệm đã được đóng và ghi nhận trong Demo Sandbox.',
+          type: 'success'
+        });
+        setShowPrintModal(true);
+        await loadData();
+        return;
+      }
+
       // Pre-sync pending local orders so server backend has all shift orders before locking snapshot
       try {
         await useGlobalSyncStore.getState().syncNow('pre-shift-close');
@@ -307,6 +452,7 @@ export default function StatisticsScreen() {
       adjustmentIncreaseQuantity: reportData.adjustmentIncreaseQuantity || 0,
       adjustmentDecreaseQuantity: reportData.adjustmentDecreaseQuantity || 0,
       notes: reportData.closingRemarks || undefined,
+      isDemo: isDemo,
     }, { paperSize: '80mm' });
 
     try {
@@ -325,7 +471,7 @@ export default function StatisticsScreen() {
           THỐNG KÊ
         </Text>
         <Text className="mt-1" style={{ fontSize: 11, letterSpacing: 3, color: '#525252', textTransform: 'uppercase' }}>
-          {role === 'Cashier' ? 'Báo cáo thu ngân' : role === 'WarehouseStaff' ? 'Báo cáo kho' : 'Báo cáo tổng hợp'}
+          {isDemo ? 'Báo cáo trải nghiệm hệ thống' : (role === 'Cashier' ? 'Báo cáo thu ngân' : role === 'WarehouseStaff' ? 'Báo cáo kho' : 'Báo cáo tổng hợp')}
         </Text>
       </View>
 
@@ -338,7 +484,7 @@ export default function StatisticsScreen() {
         <View className="border-2 border-black p-5 mb-6 bg-white">
           <View className="flex-row justify-between items-center mb-3">
             <Text className="font-black text-black uppercase tracking-widest text-xs">
-              Ca làm việc {role === 'Cashier' ? 'thu ngân' : role === 'WarehouseStaff' ? 'thủ kho' : 'quản lý'}
+              Ca làm việc {isDemo ? 'trải nghiệm (Demo Sandbox)' : (role === 'Cashier' ? 'thu ngân' : role === 'WarehouseStaff' ? 'thủ kho' : 'quản lý')}
             </Text>
             <View className={`px-2 py-0.5 border ${hasActiveShift ? 'bg-green-100 border-green-600' : 'bg-yellow-100 border-yellow-600'}`}>
               <Text className={`text-[10px] font-bold ${hasActiveShift ? 'text-green-800' : 'text-yellow-800'}`}>
@@ -352,11 +498,11 @@ export default function StatisticsScreen() {
             <>
               <View className="flex-row justify-between mb-2">
                 <Text className="text-xs font-bold text-gray-600">Bắt đầu:</Text>
-                <Text className="text-xs font-bold text-black font-mono">{formatVietnamDateTime(currentShift?.startedAt || '')}</Text>
+                <Text className="text-xs font-bold text-black font-mono">{formatVietnamDateTime(isDemo ? (demoShift?.startedAt || '') : (currentShift?.startedAt || ''))}</Text>
               </View>
               <View className="flex-row justify-between mb-2">
                 <Text className="text-xs font-bold text-gray-600">Người thực hiện:</Text>
-                <Text className="text-xs font-bold text-black">{user?.name || user?.username} (@{user?.username})</Text>
+                <Text className="text-xs font-bold text-black">{isDemo ? 'Khách Trải Nghiệm (@demo_viewer)' : `${user?.name || user?.username} (@${user?.username})`}</Text>
               </View>
             </>
           ) : (
@@ -449,8 +595,8 @@ export default function StatisticsScreen() {
           </View>
         )}
 
-        {/* ===================== ADMIN / MANAGER VIEW ===================== */}
-        {(role === 'Admin' || role === 'Manager') && (
+        {/* ===================== ADMIN / MANAGER / DEMO VIEW ===================== */}
+        {(role === 'Admin' || role === 'Manager' || isDemo) && (
           <View>
             {/* Filter Tabs */}
             <View className="flex-row border-2 border-black mb-6">

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useSafeLogout } from '@/hooks/useSafeLogout';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
+import { getRoleDisplayName, isDemoRole } from '@/utils/roleUtils';
 
 const ROUTE_META: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   Dashboard: { label: "Tổng quan", icon: "pie-chart" },
@@ -61,7 +62,7 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
         </Text>
         <View className="mt-2.5 inline-flex self-start bg-black px-2 py-0.5 border border-black">
           <Text className="text-[10px] font-black text-white uppercase tracking-wider">
-            {role === "Admin" ? "Quản trị viên" : role === "Manager" ? "Quản lý" : role === "Cashier" ? "Thu ngân" : "Thủ kho"}
+            {getRoleDisplayName(role)}
           </Text>
         </View>
       </View>
@@ -126,7 +127,7 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
           </View>
           <View className="flex-1">
             <Text className="text-xs font-black text-black" numberOfLines={1}>
-              {user?.name || user?.username}
+              {isDemoRole(role) ? (user?.name?.replace(/\s*\(Demo\)/i, '') || 'Khách Trải Nghiệm') : (user?.name || user?.username)}
             </Text>
             <Text className="text-[10px] text-gray-500 font-bold uppercase">
               @{user?.username}

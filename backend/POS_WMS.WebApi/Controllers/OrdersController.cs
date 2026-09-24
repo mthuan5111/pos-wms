@@ -9,7 +9,7 @@ namespace POS_WMS.WebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize(Roles = "Admin,Manager,Cashier")]
+    [Authorize(Roles = "Admin,Manager,Cashier,DemoUser")]
     public class OrdersController : ControllerBase
     {
         private readonly IOrderService _orderService;
@@ -65,6 +65,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost("sync")]
+        [Authorize(Roles = "Admin,Manager,Cashier")]
         public async Task<IActionResult> SyncOfflineOrder([FromBody] OrderSyncRequestDto request)
         {
             try

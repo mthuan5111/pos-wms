@@ -67,7 +67,9 @@ namespace POS_WMS.WebApi.Controllers
                     Id = customer.Id,
                     Name = customer.Name,
                     Phone = customer.Phone,
-                    Address = customer.Address
+                    Address = customer.Address,
+                    Code = customer.Code,
+                    IsSystem = customer.IsSystem
                 };
                 return Ok(ApiResponse<CustomerDto>.Success(dto));
             }
@@ -108,6 +110,11 @@ namespace POS_WMS.WebApi.Controllers
                 if (customer == null)
                 {
                     return NotFound(ApiResponse<bool>.Failure("Không tìm thấy khách hàng", "ERR_NOT_FOUND"));
+                }
+
+                if (customer.IsSystem || customer.Code == "WALK_IN_CUSTOMER")
+                {
+                    return BadRequest(ApiResponse<bool>.Failure("Không thể sửa đổi thông tin khách hàng hệ thống.", "CANNOT_MODIFY_SYSTEM_CUSTOMER"));
                 }
 
                 customer.Name = request.Name;

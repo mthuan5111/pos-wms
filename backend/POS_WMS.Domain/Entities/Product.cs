@@ -12,6 +12,7 @@ namespace POS_WMS.Domain.Entities
         public decimal CostPrice { get; set; } = 0;
         public bool IsActive { get; set; }
         public string? ImageUrl { get; set; }
+        public string? ImagePublicId { get; set; }
         public DateTime? DeactivatedAt { get; set; }
         public int? DeactivatedByUserId { get; set; }
         public string? DeactivationReason { get; set; }

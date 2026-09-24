@@ -10,6 +10,8 @@ using POS_WMS.Application.Interfaces;
 using Scalar.AspNetCore;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -71,6 +73,13 @@ builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 builder.Services.AddScoped<IStockMovementService, StockMovementService>();
 builder.Services.AddScoped<IShiftService, ShiftService>();
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -88,9 +97,36 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = builder.Configuration["Jwt:Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
     };
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = async context =>
+        {
+            var isDemoClaim = context.Principal?.FindFirst("is_demo")?.Value;
+            var roleClaim = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+            var userIdClaim = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (isDemoClaim == "true" || roleClaim == "DemoUser" || userIdClaim == "0")
+            {
+                // Virtual Demo user bypasses DB check to preserve clean database baseline without seeding
+                return;
+            }
+            if (!int.TryParse(userIdClaim, out var userId) || userId <= 0)
+            {
+                context.Fail("Invalid user identifier.");
+                return;
+            }
+            var dbContext = context.HttpContext.RequestServices.GetRequiredService<ApplicationDbContext>();
+            var user = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null || !user.IsActive)
+            {
+                context.Fail("User is deactivated or no longer exists.");
+            }
+        }
+    };
 });
 
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 if (app.Environment.IsDevelopment())
 {
@@ -115,22 +151,6 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-
-using (var scope = app.Services.CreateScope())
-{
-    var services = scope.ServiceProvider;
-    try
-    {
-        if (app.Environment.IsDevelopment())
-        {
-            await POS_WMS.Infrastructure.Persistence.DatabaseSeeder.SeedDataAsync(services);
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Lỗi khi Seed Data: {ex.Message}");
-    }
-}
 
 app.Run();
 

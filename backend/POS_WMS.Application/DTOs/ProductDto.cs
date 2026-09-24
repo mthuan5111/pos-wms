@@ -11,9 +11,10 @@ namespace POS_WMS.Application.DTOs
         public string Name { get; set; } = string.Empty;
         public string Barcode { get; set; } = string.Empty;
         public decimal Price { get; set; }
-        public decimal CostPrice { get; set; }
+        public decimal? CostPrice { get; set; }
         public bool IsActive { get; set; }
         public string? ImageUrl { get; set; }
+        public string? ImagePublicId { get; set; }
         public DateTime? DeactivatedAt { get; set; }
         public string? DeactivationReason { get; set; }
         public int LowStockThreshold { get; set; } = 10;

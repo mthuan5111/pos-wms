@@ -7,6 +7,7 @@ import { useAuthStore } from "@/store/authStore";
 import { useModalStore } from "@/store/useModalStore";
 import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
 import { useCacheInvalidationStore } from "@/store/useCacheInvalidationStore";
+import { isDemoUser } from "@/utils/roleUtils";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
@@ -33,6 +34,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useShiftStore } from "@/store/useShiftStore";
+import { useDemoSandboxStore } from "@/store/useDemoSandboxStore";
 import { generateSalesReceiptHtml, SalesReceiptPrintData } from "@/utils/printTemplates";
 import { printDocument } from "@/utils/printService";
 
@@ -73,6 +75,8 @@ export default function PosScreen() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const { user } = useAuthStore();
+  const isDemo = isDemoUser(user);
+  const sandboxStockDeltas = useDemoSandboxStore(state => state.sandboxStockDeltas);
   const {
     items,
     addToCart,
@@ -220,7 +224,10 @@ export default function PosScreen() {
         });
         return;
       }
-      if (foundProduct.StockQuantity <= 0) {
+      const availStock = isDemo
+        ? useDemoSandboxStore.getState().getEffectiveStock(foundProduct.Id, foundProduct.StockQuantity)
+        : foundProduct.StockQuantity;
+      if (availStock <= 0) {
         useModalStore.getState().showModal({ title: "Lỗi", message: "Sản phẩm đã hết hàng", type: "error" });
         return;
       }
@@ -261,9 +268,14 @@ export default function PosScreen() {
         if (isUnconfigured) {
           setCartErrors(prev => ({ ...prev, [item.productId]: "Sản phẩm chưa cấu hình giá bán." }));
           hasError = true;
-        } else if (prod.StockQuantity < item.quantity) {
-          setCartErrors(prev => ({ ...prev, [item.productId]: `Vượt tồn kho (chỉ còn ${prod.StockQuantity}).` }));
-          hasError = true;
+        } else {
+          const availStock = isDemo
+            ? useDemoSandboxStore.getState().getEffectiveStock(prod.Id, prod.StockQuantity)
+            : prod.StockQuantity;
+          if (availStock < item.quantity) {
+            setCartErrors(prev => ({ ...prev, [item.productId]: `Vượt tồn kho (chỉ còn ${availStock}).` }));
+            hasError = true;
+          }
         }
       }
     }
@@ -304,7 +316,7 @@ export default function PosScreen() {
       const receiptData: SalesReceiptPrintData = {
         storeName: "POS & WMS STORE",
         storeAddress: "Hệ thống Quản lý Bán hàng & Kho",
-        title: "HÓA ĐƠN BÁN HÀNG",
+        title: isDemo ? "HÓA ĐƠN TRẢI NGHIỆM" : "HÓA ĐƠN BÁN HÀNG",
         receiptNumber: offlineReferenceId.replace('ORD_', '').substring(0, 16),
         createdAt: new Date().toISOString(),
         cashierName: employeeName,
@@ -315,6 +327,7 @@ export default function PosScreen() {
         totalAmount: totalPrice,
         customerGivenAmount: customerGiven > 0 ? customerGiven : totalPrice,
         changeAmount: Math.max(0, customerGiven - totalPrice),
+        isDemo: isDemo,
       };
 
       await printDocument({
@@ -360,6 +373,42 @@ export default function PosScreen() {
         unitPrice: item.price,
         lineTotal: item.quantity * item.price,
       }));
+
+      // DEMO SANDBOX ISOLATION BRANCH
+      if (isDemo) {
+        const demoOrderRes = await useDemoSandboxStore.getState().createSandboxOrder({
+          customerName: cName,
+          totalAmount: totalPrice,
+          paymentMethod,
+          items: items.map(it => ({
+            productId: it.productId,
+            name: it.name,
+            quantity: it.quantity,
+            price: it.price,
+          })),
+        });
+
+        setIsCheckoutModalVisible(false);
+        clearCart();
+        await loadData();
+
+        await handlePrintInvoice(
+          demoOrderRes.offlineReferenceId,
+          totalPrice,
+          eName,
+          cName,
+          paymentMethod,
+          customerGiven,
+          printSnapshotItems
+        );
+
+        useModalStore.getState().showModal({
+          title: "Thành công (Sandbox)",
+          message: `Tạo đơn hàng trải nghiệm thành công!\nMã đơn: ${demoOrderRes.offlineReferenceId}\n(Dữ liệu lưu an toàn trong Demo Sandbox, không ảnh hưởng cơ sở dữ liệu chính)`,
+          type: "success"
+        });
+        return;
+      }
 
       await db.withTransactionAsync(async () => {
         await db.runAsync(
@@ -548,7 +597,9 @@ export default function PosScreen() {
                   paddingBottom: !isDesktop && cartItemCount > 0 ? 80 : 20,
                 }}
                 renderItem={({ item }: { item: any }) => {
-                  const stock = item.StockQuantity || item.stockquantity || 0;
+                  const stock = isDemo
+                    ? useDemoSandboxStore.getState().getEffectiveStock(item.Id || item.id, item.StockQuantity || item.stockquantity || 0)
+                    : (item.StockQuantity || item.stockquantity || 0);
                   const isOutOfStock = stock <= 0;
                   const isMissingPrice = item.IsSalePriceConfigured === false || item.isSalePriceConfigured === false;
                   return (
@@ -574,12 +625,27 @@ export default function PosScreen() {
                         setCartQtyStrings(prev => ({ ...prev, [item.Id || item.id]: String(nextQ) }));
                       }}
                     >
-                      <View className="flex-1 bg-gray-100 items-center justify-center">
-                        <Image
-                          source={{ uri: item.ImageUrl || item.imageurl || 'https://via.placeholder.com/400x400.png?text=POS' }}
-                          style={{ width: "100%", height: "100%" }}
-                          resizeMode="cover"
-                        />
+                      <View
+                        style={{
+                          width: "100%",
+                          flex: 1,
+                          backgroundColor: "#FFFFFF",
+                          overflow: "hidden",
+                          justifyContent: "center",
+                          alignItems: "center",
+                        }}
+                      >
+                        {(item.ImageUrl || item.imageurl) ? (
+                          <Image
+                            source={{ uri: item.ImageUrl || item.imageurl }}
+                            style={{ width: "100%", height: "100%" }}
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <View style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" }}>
+                            <Ionicons name="image-outline" size={28} color="#9ca3af" />
+                          </View>
+                        )}
                         {isOutOfStock && (
                           <View className="absolute inset-0 bg-white/75 items-center justify-center">
                             <View className="bg-black px-2.5 py-1">

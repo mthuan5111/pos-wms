@@ -4,20 +4,23 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { getServerReceipts } from "@/services/goodsReceiptApi";
+import { useAuthStore } from "@/store/authStore";
 
 export interface ServerGoodsReceiptDto {
   id: number;
   offlineReferenceId: string | null;
-  totalAmount: number;
+  totalAmount: number | null;
   createdAt: string;
   userId: number | null;
   user: { name: string } | null;
   supplier: { name: string } | null;
   remarks?: string;
-  details?: Array<{ productId: number; productName: string; quantity: number; costPrice: number }>;
+  details?: Array<{ productId: number; productName: string; quantity: number; costPrice?: number | null }>;
 }
 
 export default function WarehouseInvoiceScreen() {
+  const { user } = useAuthStore();
+  const canViewCostPrice = ["Admin", "Manager", "SystemAdmin"].includes(user?.role || "");
   const [receipts, setReceipts] = useState<ServerGoodsReceiptDto[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -80,7 +83,9 @@ export default function WarehouseInvoiceScreen() {
           <View className="bg-white p-4 mb-4 border-2 border-black">
             <View className="flex-row justify-between items-center mb-2 pb-2 border-b-2 border-black">
               <Text className="font-bold text-lg text-black">{item.offlineReferenceId || `ID: ${item.id}`}</Text>
-              <Text className="text-black font-black font-serif text-lg">{formatCurrency(item.totalAmount)}</Text>
+              <Text className="text-black font-black font-serif text-lg">
+                {canViewCostPrice && item.totalAmount != null ? formatCurrency(item.totalAmount) : "Không có quyền xem"}
+              </Text>
             </View>
             <View className="flex-row items-center mb-1">
               <Ionicons name="time" size={14} color="#000" style={{ width: 20 }} />

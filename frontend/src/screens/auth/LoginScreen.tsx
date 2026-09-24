@@ -1,14 +1,15 @@
 import { useModalStore } from '@/store/useModalStore';
 import React, { useState } from 'react';
-import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView } from 'react-native';
+import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableOpacity } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import CustomInput from '@/components/CustomInput';
 import CustomButton from '@/components/CustomButton';
 import { useAuthStore } from '@/store/authStore';
+import { useBootstrapStore } from '@/store/useBootstrapStore';
 import apiClient from '@/services/apiClient';
-import { pullMasterData } from '@/database/db';
+import { clearTokens } from '@/utils/token';
 
 const loginSchema = z.object({
     username: z.string().min(1, 'Tên đăng nhập không được để trống'),
@@ -25,6 +26,7 @@ export default function LoginScreen() {
     const {
         control,
         handleSubmit,
+        setValue,
         formState: { errors },
     } = useForm<LoginFormData>({
         resolver: zodResolver(loginSchema),
@@ -38,40 +40,93 @@ export default function LoginScreen() {
         setIsLoading(true);
         setApiError(null);
         try {
+            // Đảm bảo xóa token cũ để tránh xung đột phiên hoặc đính kèm Authorization header rác
+            await clearTokens();
+
             console.log("[Auth] Đang gửi Request đăng nhập...");
             const response = await apiClient.post('/Auth/login', {
-                username: data.username,
+                username: data.username.trim(),
                 password: data.password,
             });
-            const result = response.data;
-            if (result.isSuccess) {
-                const { accessToken, refreshToken, ...userInfo } = result.data;
-                console.log("[Auth] Đăng nhập thành công, lưu Token vào Store...");
-                await setAuthAsync( userInfo, accessToken, refreshToken);
+
+            if (response.data?.isSuccess && response.data?.data) {
+                const loginResult = response.data.data;
+                const { accessToken, refreshToken, ...userInfo } = loginResult;
+                console.log("[Auth] Đăng nhập thành công, lưu Token vào Store...", userInfo.role);
+                useBootstrapStore.getState().reset();
+                await setAuthAsync(userInfo, accessToken, refreshToken);
                 // Sau khi lưu token, RootNavigator sẽ tự động switch sang BootstrapScreen
             } else {
-                setApiError(result.message || 'Đăng nhập thất bại');
+                setApiError(response.data?.message || 'Đăng nhập thất bại');
             }
         } catch (error: any) {
-            if (error?.response?.status === 401) {
-                console.warn("[Auth] Đăng nhập thất bại: Tài khoản hoặc mật khẩu không chính xác.");
-            } else {
-                console.error("[Auth] Lỗi Catch:", error.message, error.response?.status ?? "No response");
+            if (__DEV__) {
+                console.log("[Auth Debug]", {
+                    endpoint: error.config?.url,
+                    status: error.response?.status,
+                    errorCode: error.response?.data?.errorCode,
+                    message: error.response?.data?.message,
+                    code: error.code
+                });
             }
+
             if (error.isAxiosError) {
                 if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-                    setApiError('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
+                    setApiError('Máy chủ phản hồi quá lâu (Timeout). Vui lòng thử lại.');
                 } else if (!error.response) {
-                    // This catches Network Error or ERR_CONNECTION_REFUSED
-                    setApiError('Không thể kết nối máy chủ. Vui lòng kiểm tra backend và địa chỉ API.');
-                } else if (error.response.status === 401) {
-                    setApiError('Tên đăng nhập hoặc mật khẩu không đúng.');
+                    setApiError('Không thể kết nối máy chủ. Vui lòng kiểm tra kết nối mạng hoặc địa chỉ máy chủ backend.');
                 } else {
-                    setApiError(error.response?.data?.message || 'Lỗi mạng: Không thể kết nối máy chủ');
+                    const status = error.response.status;
+                    if (status === 400) {
+                        setApiError('Dữ liệu đăng nhập không hợp lệ. Vui lòng kiểm tra lại.');
+                    } else if (status === 401) {
+                        setApiError('Tài khoản hoặc mật khẩu không đúng.');
+                    } else if (status === 403) {
+                        setApiError('Tài khoản không có quyền đăng nhập hoặc đã bị hạn chế truy cập.');
+                    } else if (status === 404) {
+                        setApiError('Không tìm thấy dịch vụ đăng nhập máy chủ (404 Not Found). Vui lòng kiểm tra lại cấu hình API.');
+                    } else if (status === 429) {
+                        setApiError('Hệ thống ghi nhận quá nhiều yêu cầu đăng nhập. Vui lòng thử lại sau ít phút.');
+                    } else if (status >= 500) {
+                        setApiError(`Hệ thống máy chủ đang gặp sự cố (HTTP ${status}). Vui lòng thử lại sau.`);
+                    } else {
+                        setApiError(error.response?.data?.message || 'Đăng nhập không thành công. Vui lòng thử lại.');
+                    }
                 }
             } else {
-                // Nếu không phải lỗi API, đây chính là lỗi Code/Thư viện!
                 setApiError('Lỗi hệ thống: ' + error.message);
+            }
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleDemoLogin = async () => {
+        setIsLoading(true);
+        setApiError(null);
+        try {
+            await clearTokens();
+            const response = await apiClient.post('/Auth/demo-login');
+            const data = response.data?.data;
+            if (data?.accessToken) {
+                await setAuthAsync(
+                    {
+                        id: data.id,
+                        username: data.username,
+                        name: data.name,
+                        role: data.role,
+                    },
+                    data.accessToken,
+                    data.refreshToken || ''
+                );
+            } else {
+                setApiError(response.data?.message || 'Đăng nhập Demo không thành công');
+            }
+        } catch (error: any) {
+            if (error.response?.status === 429) {
+                setApiError('Hệ thống ghi nhận quá nhiều yêu cầu Demo. Vui lòng thử lại sau ít phút.');
+            } else {
+                setApiError(error.response?.data?.message || 'Không thể kết nối máy chủ Demo. Vui lòng thử lại.');
             }
         } finally {
             setIsLoading(false);
@@ -163,6 +218,19 @@ export default function LoginScreen() {
                             disabled={isLoading}
                             loading={isLoading}
                         />
+                    </View>
+
+                    {/* Quick Demo Access Button */}
+                    <View className='mt-3'>
+                        <TouchableOpacity
+                            onPress={handleDemoLogin}
+                            disabled={isLoading}
+                            className='py-2.5 px-3 border border-dashed border-neutral-300 rounded items-center bg-neutral-50 active:bg-neutral-100'
+                        >
+                            <Text className='text-xs font-semibold text-neutral-600'>
+                                👤 Trải nghiệm Demo ngay (@demo_viewer)
+                            </Text>
+                        </TouchableOpacity>
                     </View>
 
                     {/* Bottom decorative element */}

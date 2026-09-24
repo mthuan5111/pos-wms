@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import { useAuthStore } from "@/store/authStore";
 import {
   getAccessToken,
@@ -7,38 +8,60 @@ import {
 } from "@/utils/token";
 import axios, { AxiosError } from "axios";
 
-let API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
-if (!API_BASE_URL) {
-  console.error("Critical Error: API_BASE_URL is undefined or empty!");
-} else {
+function resolveAndValidateApiUrl(): string {
+  let url = (process.env.EXPO_PUBLIC_API_URL || '').trim();
+
+  if (!url) {
+    const errorMsg = "[API Config] LỖI CẤU HÌNH: EXPO_PUBLIC_API_URL chưa được thiết lập trong biến môi trường (.env)!";
+    console.error(errorMsg);
+    if (!__DEV__) {
+      throw new Error(errorMsg);
+    }
+    return '';
+  }
+
   try {
-    const urlObj = new URL(API_BASE_URL);
-    if (__DEV__) {
-      // In development, allow HTTP for localhost and LAN IPs
-      const isLocalhost = urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1';
-      const isLanIp = /^192\.168\.\d+\.\d+$/.test(urlObj.hostname) || /^10\.\d+\.\d+\.\d+$/.test(urlObj.hostname);
-      
-      if (urlObj.protocol === 'http:' && !isLocalhost && !isLanIp) {
-         console.warn(`[API] Warning: HTTP is used for a non-local address (${urlObj.hostname}). This is not recommended.`);
+    const urlObj = new URL(url);
+
+    // Normalize trailing slash
+    url = url.replace(/\/+$/, '');
+
+    if (!__DEV__) {
+      // In production, enforce HTTPS and disallow localhost / loopback
+      if (urlObj.protocol !== 'https:') {
+        throw new Error('[API Config] EXPO_PUBLIC_API_URL phải sử dụng giao thức HTTPS trong môi trường production');
+      }
+      if (urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1') {
+        throw new Error('[API Config] Không được sử dụng localhost làm API_URL trong môi trường production');
       }
     } else {
-      // In production, enforce HTTPS
-      if (urlObj.protocol !== 'https:') {
-        throw new Error('API_URL must use HTTPS in production');
+      // In development, validate platform-specific network constraints
+      const isLocalhost = urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1';
+      const isLanIp = /^192\.168\.\d+\.\d+$/.test(urlObj.hostname) || /^10\.\d+\.\d+\.\d+$/.test(urlObj.hostname);
+
+      if (urlObj.protocol === 'http:' && !isLocalhost && !isLanIp) {
+        console.warn(`[API] Cảnh báo: HTTP đang được sử dụng cho địa chỉ non-local (${urlObj.hostname}).`);
+      }
+
+      if (isLocalhost) {
+        if (Platform.OS === 'android') {
+          console.warn('[API Config Warning] Đang trỏ tới localhost trên Android. Trình giả lập Android cần dùng 10.0.2.2 hoặc IP mạng nội bộ của máy tính.');
+        } else if (Platform.OS === 'ios' && !Platform.isPad && !Platform.isTV) {
+          console.warn('[API Config Warning] Đang trỏ tới localhost trên thiết bị iOS. Thiết bị thật cần dùng IP mạng nội bộ của máy tính.');
+        }
       }
     }
-    
-    // Normalize trailing slash
-    if (API_BASE_URL.endsWith('/')) {
-      API_BASE_URL = API_BASE_URL.slice(0, -1);
-    }
-  } catch (error) {
-    console.error("Invalid API_URL configuration:", error);
+  } catch (error: any) {
+    console.error("[API Config] Cấu hình API_URL không hợp lệ:", error.message || error);
   }
+
+  return url;
 }
 
+const API_BASE_URL = resolveAndValidateApiUrl();
+
 if (__DEV__) {
-  console.log(`[API] Configuring apiClient with baseURL: ${API_BASE_URL}`);
+  console.log(`[API] Khởi tạo apiClient với baseURL: ${API_BASE_URL || '(chưa thiết lập)'}`);
 }
 
 const apiClient = axios.create({
@@ -66,9 +89,18 @@ const processQueue = (error: Error | null, token: string | null = null) => {
 
 apiClient.interceptors.request.use(
   async (config) => {
-    const token = await getAccessToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    if (!config.baseURL && !config.url?.startsWith('http')) {
+      const configError = new Error('LỖI CẤU HÌNH HỆ THỐNG: Địa chỉ máy chủ (EXPO_PUBLIC_API_URL) chưa được thiết lập. Vui lòng kiểm tra file .env');
+      return Promise.reject(configError);
+    }
+    const isAuthEndpoint = config.url?.includes('/Auth/login') || config.url?.includes('/Auth/refresh-token');
+    if (!isAuthEndpoint) {
+      const token = await getAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } else {
+      delete config.headers.Authorization;
     }
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
       delete config.headers['Content-Type'];

@@ -17,6 +17,7 @@ import {
 import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
 import { useAuthStore } from "@/store/authStore";
 import { getVietnamPeriodRangesUtc, formatVietnamDateTime } from "@/utils/timezone";
+import { isDemoRole } from "@/utils/roleUtils";
 
 type PeriodType = "today" | "7days" | "30days";
 
@@ -31,12 +32,15 @@ export default function DashboardScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuthStore();
   const role = user?.role;
+  const isDemo = isDemoRole(role);
+  const canViewReports = role === "Admin" || role === "Manager";
+  const inFlightRef = useRef(false);
   const canCreateReceipt = user?.role === "Admin" || user?.role === "Manager" || user?.role === "WarehouseStaff";
 
-  const [summaryState, setSummaryState] = useState<{loading: boolean, error: string|null, current: DashboardSummaryDto|null, prev: DashboardSummaryDto|null}>({loading: true, error: null, current: null, prev: null});
-  const [chartState, setChartState] = useState<{loading: boolean, error: string|null, data: RevenueComparisonPointDto[]|null}>({loading: true, error: null, data: null});
-  const [topProductsState, setTopProductsState] = useState<{loading: boolean, error: string|null, data: TopProductDto[]|null}>({loading: true, error: null, data: null});
-  const [lowStockState, setLowStockState] = useState<{loading: boolean, error: string|null, data: LowStockProductDto[]|null}>({loading: true, error: null, data: null});
+  const [summaryState, setSummaryState] = useState<{loading: boolean, error: string|null, current: DashboardSummaryDto|null, prev: DashboardSummaryDto|null}>({loading: canViewReports, error: null, current: null, prev: null});
+  const [chartState, setChartState] = useState<{loading: boolean, error: string|null, data: RevenueComparisonPointDto[]|null}>({loading: canViewReports, error: null, data: null});
+  const [topProductsState, setTopProductsState] = useState<{loading: boolean, error: string|null, data: TopProductDto[]|null}>({loading: canViewReports, error: null, data: null});
+  const [lowStockState, setLowStockState] = useState<{loading: boolean, error: string|null, data: LowStockProductDto[]|null}>({loading: canViewReports, error: null, data: null});
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<number>>(new Set());
   const [issueFilter, setIssueFilter] = useState<"all" | "out" | "low" | "missing_price">("all");
 
@@ -107,6 +111,21 @@ export default function DashboardScreen() {
   };
 
   const loadData = useCallback(async (selectedPeriod = period) => {
+    // Nếu role không có quyền báo cáo (DemoUser, Cashier, WarehouseStaff), không gọi API Reports để tránh 403
+    if (!canViewReports) {
+      setSummaryState({ loading: false, error: null, current: null, prev: null });
+      setChartState({ loading: false, error: null, data: null });
+      setTopProductsState({ loading: false, error: null, data: null });
+      setLowStockState({ loading: false, error: null, data: null });
+      return;
+    }
+
+    if (inFlightRef.current) {
+      console.log("[Dashboard] Yêu cầu đang được xử lý, bỏ qua lần gọi trùng lặp.");
+      return;
+    }
+
+    inFlightRef.current = true;
     reqSeqRef.current += 1;
     const currentSeq = reqSeqRef.current;
 
@@ -117,69 +136,100 @@ export default function DashboardScreen() {
 
     const { currentStartStr, currentEndStr, previousStartStr, previousEndStr } = getDateRanges(selectedPeriod);
 
-    // Run independently
-    Promise.allSettled([
-      getDashboardSummary(currentStartStr, currentEndStr),
-      getDashboardSummary(previousStartStr, previousEndStr)
-    ]).then(results => {
-      if (reqSeqRef.current !== currentSeq) return;
-      const curSumRes = results[0].status === 'fulfilled' ? results[0].value : null;
-      const prevSumRes = results[1].status === 'fulfilled' ? results[1].value : null;
+    try {
+      await Promise.allSettled([
+        // 1. Tóm tắt kinh doanh (Summary)
+        Promise.allSettled([
+          getDashboardSummary(currentStartStr, currentEndStr),
+          getDashboardSummary(previousStartStr, previousEndStr)
+        ]).then(results => {
+          if (reqSeqRef.current !== currentSeq) return;
+          const curSumRes = results[0].status === 'fulfilled' ? results[0].value : null;
+          const prevSumRes = results[1].status === 'fulfilled' ? results[1].value : null;
 
-      if (!curSumRes?.isSuccess) {
-         setSummaryState(s => ({ ...s, loading: false, error: "Lỗi tải tóm tắt", current: null }));
-      } else {
-         setSummaryState({ loading: false, error: null, current: curSumRes.data, prev: prevSumRes?.isSuccess ? prevSumRes.data : null });
-      }
-    });
+          if (!curSumRes?.isSuccess) {
+            const isForbidden = (results[0] as any)?.reason?.response?.status === 403;
+            setSummaryState({
+              loading: false,
+              error: isForbidden ? "Không có quyền truy cập dữ liệu tóm tắt kinh doanh" : "Không thể tải dữ liệu tóm tắt",
+              current: null,
+              prev: null
+            });
+          } else {
+            setSummaryState({
+              loading: false,
+              error: null,
+              current: curSumRes.data,
+              prev: prevSumRes?.isSuccess ? prevSumRes.data : null
+            });
+          }
+        }),
 
-    getRevenueChartComparison(currentStartStr, currentEndStr, previousStartStr, previousEndStr)
-      .then(res => {
-        if (reqSeqRef.current !== currentSeq) return;
-        if (res.isSuccess) setChartState({ loading: false, error: null, data: res.data });
-        else setChartState({ loading: false, error: "Lỗi biểu đồ", data: null });
-      })
-      .catch((err) => {
-        if (reqSeqRef.current !== currentSeq) return;
-        console.warn("[Dashboard] chart comparison error:", err);
-        setChartState({ loading: false, error: "Lỗi biểu đồ", data: null });
-      });
+        // 2. Biểu đồ doanh thu (Revenue Chart)
+        getRevenueChartComparison(currentStartStr, currentEndStr, previousStartStr, previousEndStr)
+          .then(res => {
+            if (reqSeqRef.current !== currentSeq) return;
+            if (res.isSuccess) setChartState({ loading: false, error: null, data: res.data });
+            else setChartState({ loading: false, error: "Không thể tải biểu đồ doanh thu", data: null });
+          })
+          .catch((err) => {
+            if (reqSeqRef.current !== currentSeq) return;
+            const isForbidden = err?.response?.status === 403;
+            setChartState({
+              loading: false,
+              error: isForbidden ? "Không có quyền xem biểu đồ" : "Không thể tải biểu đồ doanh thu",
+              data: null
+            });
+          }),
 
-    getTopProducts(5, currentStartStr, currentEndStr)
-      .then(res => {
-        if (reqSeqRef.current !== currentSeq) return;
-        if (res.isSuccess) setTopProductsState({ loading: false, error: null, data: res.data });
-        else setTopProductsState({ loading: false, error: "Lỗi top SP", data: null });
-      })
-      .catch(() => {
-        if (reqSeqRef.current !== currentSeq) return;
-        setTopProductsState({ loading: false, error: "Lỗi top SP", data: null });
-      });
+        // 3. Top sản phẩm bán chạy (Top Products)
+        getTopProducts(5, currentStartStr, currentEndStr)
+          .then(res => {
+            if (reqSeqRef.current !== currentSeq) return;
+            if (res.isSuccess) setTopProductsState({ loading: false, error: null, data: res.data });
+            else setTopProductsState({ loading: false, error: "Không thể tải sản phẩm bán chạy", data: null });
+          })
+          .catch((err) => {
+            if (reqSeqRef.current !== currentSeq) return;
+            const isForbidden = err?.response?.status === 403;
+            setTopProductsState({
+              loading: false,
+              error: isForbidden ? "Không có quyền xem sản phẩm bán chạy" : "Không thể tải sản phẩm bán chạy",
+              data: null
+            });
+          }),
 
-    getLowStockProducts(1000)
-      .then(res => {
-        if (reqSeqRef.current !== currentSeq) return;
-        if (res.isSuccess) {
-          const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
-          setLowStockState({ loading: false, error: null, data: list });
-        } else {
-          setLowStockState({ loading: false, error: "Lỗi tải hàng cần xử lý", data: null });
-        }
-      })
-      .catch(() => {
-        if (reqSeqRef.current !== currentSeq) return;
-        setLowStockState({ loading: false, error: "Lỗi tải hàng cần xử lý", data: null });
-      });
+        // 4. Hàng tồn kho cần xử lý (Low Stock)
+        getLowStockProducts(1000)
+          .then(res => {
+            if (reqSeqRef.current !== currentSeq) return;
+            if (res.isSuccess) {
+              const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+              setLowStockState({ loading: false, error: null, data: list });
+            } else {
+              setLowStockState({ loading: false, error: "Không thể tải hàng tồn kho cần xử lý", data: null });
+            }
+          })
+          .catch((err) => {
+            if (reqSeqRef.current !== currentSeq) return;
+            const isForbidden = err?.response?.status === 403;
+            setLowStockState({
+              loading: false,
+              error: isForbidden ? "Không có quyền xem hàng cần xử lý" : "Không thể tải hàng tồn kho cần xử lý",
+              data: null
+            });
+          })
+      ]);
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [period, canViewReports]);
 
-  }, [period]);
-
-  // Sync listen
-  const { lastSyncAt } = useGlobalSyncStore();
-
+  // Sync listen - only on focus or manual refresh, not looped
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [loadData, lastSyncAt])
+    }, [loadData])
   );
 
   const formatCurrency = (amount: number | null | undefined) => {
@@ -216,21 +266,6 @@ export default function DashboardScreen() {
 
   const currentSummary = summaryState.current;
   const previousSummary = summaryState.prev;
-
-  if (summaryState.error && !currentSummary) {
-    return (
-      <SafeAreaView className="flex-1 bg-white justify-center items-center">
-        <Ionicons name="alert-circle-outline" size={48} color="#000" />
-        <Text className="mt-4 font-bold" style={{ fontSize: 16 }}>{summaryState.error}</Text>
-        <TouchableOpacity
-          onPress={() => loadData()}
-          className="mt-4 px-6 py-2 border-2 border-black bg-black"
-        >
-          <Text className="text-white font-bold">THỬ LẠI</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
-  }
 
   // KPIs
   const netRevenue = currentSummary?.netRevenue || 0;
@@ -287,7 +322,38 @@ export default function DashboardScreen() {
         refreshControl={<RefreshControl refreshing={summaryState.loading} onRefresh={() => loadData()} tintColor="#000" />}
       >
         <View className="p-4 sm:p-6">
-          {summaryState.loading && !currentSummary ? (
+          {/* Demo Sandbox Alert Card */}
+          {isDemo && (
+            <View className="mb-6 p-4 border-[1.5px] border-black bg-neutral-50">
+              <View className="flex-row items-center mb-1.5">
+                <Ionicons name="shield-checkmark" size={18} color="#000" />
+                <Text className="ml-2 font-bold text-xs uppercase tracking-wider text-black">
+                  Tài khoản trải nghiệm Sandbox (@demo_viewer)
+                </Text>
+              </View>
+              <Text className="text-xs text-neutral-600 leading-relaxed">
+                Dữ liệu báo cáo doanh thu và phân tích tài chính chỉ khả dụng cho Quản trị viên (Admin) và Quản lý (Manager). Bạn có thể tự do thử nghiệm các tính năng Bán hàng POS, Quản lý kho và Hóa đơn trên hệ thống.
+              </Text>
+            </View>
+          )}
+
+          {/* Inline Summary Error for Admin/Manager */}
+          {summaryState.error && !isDemo && (
+            <View className="mb-5 p-3.5 bg-neutral-100 border-2 border-black flex-row items-center justify-between">
+              <View className="flex-row items-center flex-1 mr-3">
+                <Ionicons name="alert-circle-outline" size={20} color="#000" style={{ marginRight: 8 }} />
+                <Text className="text-black text-xs font-bold leading-tight">{summaryState.error}</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => loadData()}
+                className="px-3.5 py-1.5 bg-black border border-black"
+              >
+                <Text className="text-white text-xs font-bold uppercase tracking-wider">Thử lại</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {summaryState.loading && !currentSummary && canViewReports ? (
             <View className="py-20 justify-center items-center">
               <ActivityIndicator size="large" color="#000" />
               <Text className="mt-4 font-bold" style={{ fontSize: 12, letterSpacing: 2 }}>ĐANG TẢI DỮ LIỆU...</Text>
@@ -302,9 +368,15 @@ export default function DashboardScreen() {
                     DOANH THU THUẦN
                   </Text>
                   <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
-                    {formatCurrency(netRevenue)}
+                    {isDemo ? "TRẢI NGHIỆM" : formatCurrency(netRevenue)}
                   </Text>
-                  <View className="mt-2">{renderTrend(revChange)}</View>
+                  <View className="mt-2">
+                    {isDemo ? (
+                      <Text style={{ fontSize: 11, color: '#525252' }}>Chỉ hiển thị cho Admin & Manager</Text>
+                    ) : (
+                      renderTrend(revChange)
+                    )}
+                  </View>
                 </View>
 
                 {/* 2. LỢI NHUẬN GỘP */}
@@ -312,14 +384,14 @@ export default function DashboardScreen() {
                   <Text style={{ fontSize: 10, letterSpacing: 1.5, color: '#a3a3a3', textTransform: 'uppercase', fontWeight: 'bold' }}>
                     LỢI NHUẬN GỘP
                   </Text>
-                  {currentSummary?.hasGrossProfitData === false ? (
+                  {currentSummary?.hasGrossProfitData === false || grossProfit == null || isDemo ? (
                     <View className="mt-2">
-                      <Text className="text-white font-bold" style={{ fontSize: 13, color: '#f87171' }}>CHƯA ĐỦ DỮ LIỆU GIÁ VỐN</Text>
-                      {currentSummary.missingCostSoldProductCount > 0 && (
-                        <Text style={{ fontSize: 10, color: '#a3a3a3', marginTop: 4 }}>
-                          {currentSummary.missingCostSoldProductCount} sản phẩm đã bán thiếu giá
-                        </Text>
-                      )}
+                      <Text className="text-white font-bold" style={{ fontSize: 13, color: '#94a3b8' }}>
+                        {isDemo ? "CHẾ ĐỘ TRẢI NGHIỆM" : "CHƯA ĐỦ DỮ LIỆU GIÁ VỐN"}
+                      </Text>
+                      <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
+                        {isDemo ? "Thông tin lợi nhuận và giá vốn đã được ẩn" : `${currentSummary?.missingCostSoldProductCount || 0} sản phẩm đã bán thiếu giá`}
+                      </Text>
                     </View>
                   ) : (
                     <>
@@ -352,12 +424,12 @@ export default function DashboardScreen() {
                     ĐƠN HOÀN TẤT
                   </Text>
                   <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
-                    {completedOrders} đơn
+                    {isDemo ? "--" : `${completedOrders} đơn`}
                   </Text>
                   <Text style={{ fontSize: 11, color: '#525252', marginTop: 4 }}>
-                    {currentSummary?.cancelledOrders || 0} đơn hủy
+                    {isDemo ? "Chế độ trải nghiệm" : `${currentSummary?.cancelledOrders || 0} đơn hủy`}
                   </Text>
-                  <View className="mt-2">{renderTrend(ordChange)}</View>
+                  {!isDemo && <View className="mt-2">{renderTrend(ordChange)}</View>}
                 </View>
 
                 {/* 4. TRUNG BÌNH/ĐƠN */}
@@ -366,9 +438,15 @@ export default function DashboardScreen() {
                     TRUNG BÌNH/ĐƠN
                   </Text>
                   <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
-                    {formatCurrency(avgOrderVal)}
+                    {isDemo ? "--" : formatCurrency(avgOrderVal)}
                   </Text>
-                  <View className="mt-2">{renderTrend(avgChange)}</View>
+                  <View className="mt-2">
+                    {isDemo ? (
+                      <Text style={{ fontSize: 11, color: '#525252' }}>Chế độ trải nghiệm</Text>
+                    ) : (
+                      renderTrend(avgChange)
+                    )}
+                  </View>
                 </View>
               </View>
 
@@ -433,6 +511,16 @@ export default function DashboardScreen() {
                     <View className="py-6 justify-center items-center">
                       <ActivityIndicator color="#000" />
                       <Text className="mt-2 text-xs text-gray-500 font-bold">ĐANG TẢI DANH SÁCH CẦN XỬ LÝ...</Text>
+                    </View>
+                  ) : isDemo ? (
+                    <View className="py-8 items-center text-center px-4">
+                      <Ionicons name="information-circle-outline" size={32} color="#000" />
+                      <Text style={{ fontSize: 12, color: '#000', fontWeight: 'bold', marginTop: 6, textAlign: 'center' }}>
+                        CHẾ ĐỘ TRẢI NGHIỆM: BÁO CÁO CẦN XỬ LÝ DÀNH CHO ADMIN & MANAGER
+                      </Text>
+                      <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
+                        Tài khoản Demo có thể tự do xem tồn kho trong mục Kho hàng và thực hiện bán hàng trong mục POS.
+                      </Text>
                     </View>
                   ) : displayedIssues.length === 0 ? (
                     <View className="py-6 items-center">
@@ -572,6 +660,16 @@ export default function DashboardScreen() {
                         <ActivityIndicator color="#000" />
                         <Text className="mt-2 text-xs font-bold text-gray-500 tracking-widest">ĐANG TẢI BIỂU ĐỒ...</Text>
                       </View>
+                    ) : isDemo ? (
+                      <View className="h-[300px] justify-center items-center p-6 text-center">
+                        <Ionicons name="stats-chart-outline" size={40} color="#525252" />
+                        <Text style={{ fontSize: 13, color: '#000', fontWeight: 'bold', marginTop: 8 }}>
+                          BIỂU ĐỒ DOANH THU NỘI BỘ
+                        </Text>
+                        <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
+                          Biểu đồ phân tích doanh thu chỉ hiển thị cho tài khoản Quản trị viên (Admin) và Quản lý (Manager).
+                        </Text>
+                      </View>
                     ) : chartState.error ? (
                       <View className="h-[300px] justify-center items-center">
                         <Text style={{ fontSize: 13, color: '#dc2626', fontWeight: 'bold' }}>{chartState.error}</Text>
@@ -627,38 +725,52 @@ export default function DashboardScreen() {
                     </Text>
                   </View>
                   <View className="p-5">
-                    {currentSummary?.hasInventoryValueData === false && (
-                      <View className="mb-4 bg-yellow-50 border border-yellow-400 p-2">
-                        <Text style={{ fontSize: 11, color: '#ca8a04', fontWeight: 'bold' }}>GIÁ TRỊ TỒN KHO CHƯA ĐẦY ĐỦ</Text>
-                        <Text style={{ fontSize: 10, color: '#a16207' }}>Thiếu giá vốn cho {currentSummary.missingCostInventoryProductCount} sản phẩm.</Text>
+                    {isDemo ? (
+                      <View className="py-8 items-center text-center px-2">
+                        <Ionicons name="cube-outline" size={36} color="#525252" />
+                        <Text style={{ fontSize: 12, color: '#000', fontWeight: 'bold', marginTop: 6, textAlign: 'center' }}>
+                          CHẾ ĐỘ TRẢI NGHIỆM
+                        </Text>
+                        <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
+                          Giá trị định giá tồn kho nội bộ được ẩn trong phiên trải nghiệm.
+                        </Text>
                       </View>
+                    ) : (
+                      <>
+                        {currentSummary?.hasInventoryValueData === false && (
+                          <View className="mb-4 bg-yellow-50 border border-yellow-400 p-2">
+                            <Text style={{ fontSize: 11, color: '#ca8a04', fontWeight: 'bold' }}>GIÁ TRỊ TỒN KHO CHƯA ĐẦY ĐỦ</Text>
+                            <Text style={{ fontSize: 10, color: '#a16207' }}>Thiếu giá vốn cho {currentSummary.missingCostInventoryProductCount} sản phẩm.</Text>
+                          </View>
+                        )}
+
+                        <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
+                          <Text style={{ fontSize: 13, color: '#525252' }}>Giá trị tồn kho</Text>
+                          <Text className="font-black text-black" style={{ fontSize: 14 }}>
+                            {formatCurrency(currentSummary?.totalInventoryValue || 0)}
+                          </Text>
+                        </View>
+
+                        <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
+                          <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng còn hàng</Text>
+                          <Text className="font-bold text-black" style={{ fontSize: 14 }}>{currentSummary?.totalSKUs || 0}</Text>
+                        </View>
+
+                        <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
+                          <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng hết hàng</Text>
+                          <Text className={`font-bold ${currentSummary?.outOfStockSKUs ? 'text-red-600' : 'text-black'}`} style={{ fontSize: 14 }}>
+                            {currentSummary?.outOfStockSKUs || 0}
+                          </Text>
+                        </View>
+
+                        <View className="flex-row justify-between pb-2 border-b border-gray-200">
+                          <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng sắp hết</Text>
+                          <Text className={`font-bold ${currentSummary?.lowStockSKUs ? 'text-orange-500' : 'text-black'}`} style={{ fontSize: 14 }}>
+                            {currentSummary?.lowStockSKUs || 0}
+                          </Text>
+                        </View>
+                      </>
                     )}
-
-                    <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>Giá trị tồn kho</Text>
-                      <Text className="font-black text-black" style={{ fontSize: 14 }}>
-                        {formatCurrency(currentSummary?.totalInventoryValue || 0)}
-                      </Text>
-                    </View>
-
-                    <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng còn hàng</Text>
-                      <Text className="font-bold text-black" style={{ fontSize: 14 }}>{currentSummary?.totalSKUs || 0}</Text>
-                    </View>
-
-                    <View className="flex-row justify-between mb-4 pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng hết hàng</Text>
-                      <Text className={`font-bold ${currentSummary?.outOfStockSKUs ? 'text-red-600' : 'text-black'}`} style={{ fontSize: 14 }}>
-                        {currentSummary?.outOfStockSKUs || 0}
-                      </Text>
-                    </View>
-
-                    <View className="flex-row justify-between pb-2 border-b border-gray-200">
-                      <Text style={{ fontSize: 13, color: '#525252' }}>Mặt hàng sắp hết</Text>
-                      <Text className={`font-bold ${currentSummary?.lowStockSKUs ? 'text-orange-500' : 'text-black'}`} style={{ fontSize: 14 }}>
-                        {currentSummary?.lowStockSKUs || 0}
-                      </Text>
-                    </View>
                   </View>
                 </View>
               </View>
@@ -675,6 +787,16 @@ export default function DashboardScreen() {
                   <View className="py-10 justify-center items-center">
                     <ActivityIndicator color="#000" />
                     <Text className="mt-2 text-xs font-bold text-gray-500 tracking-widest">ĐANG TẢI TOP SẢN PHẨM...</Text>
+                  </View>
+                ) : isDemo ? (
+                  <View className="py-10 justify-center items-center p-6 text-center">
+                    <Ionicons name="ribbon-outline" size={36} color="#525252" />
+                    <Text style={{ fontSize: 13, color: '#000', fontWeight: 'bold', marginTop: 6 }}>
+                      TOP SẢN PHẨM BÁN CHẠY
+                    </Text>
+                    <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
+                      Báo cáo sản phẩm bán chạy chỉ hiển thị cho Quản trị viên (Admin) và Quản lý (Manager).
+                    </Text>
                   </View>
                 ) : topProductsState.error ? (
                   <View className="py-10 justify-center items-center">

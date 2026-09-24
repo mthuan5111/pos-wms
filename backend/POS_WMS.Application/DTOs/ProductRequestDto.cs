@@ -12,6 +12,7 @@ namespace POS_WMS.Application.DTOs
         public decimal CostPrice { get; set; } = 0;
         public bool IsActive { get; set; }
         public string? ImageUrl { get; set; }
+        public string? ImagePublicId { get; set; }
         public int LowStockThreshold { get; set; } = 10;
         public bool IsSalePriceConfigured { get; set; } = true;
     }

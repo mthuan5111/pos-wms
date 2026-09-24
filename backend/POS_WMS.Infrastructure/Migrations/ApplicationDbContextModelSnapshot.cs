@@ -429,6 +429,10 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("ImagePublicId")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
                     b.Property<string>("ImageUrl")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
@@ -555,6 +559,10 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<string>("OfflineReferenceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<int>("ProductId")
                         .HasColumnType("int");
 
@@ -575,6 +583,10 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedAt");
+
+                    b.HasIndex("OfflineReferenceId")
+                        .IsUnique()
+                        .HasFilter("[OfflineReferenceId] IS NOT NULL");
 
                     b.HasIndex("ProductId");
 

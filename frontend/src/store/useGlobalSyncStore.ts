@@ -7,6 +7,7 @@ import { syncStockAdjustment } from '@/services/productApi';
 import { classifySyncError } from '@/utils/errorParser';
 import { useAuthStore } from '@/store/authStore';
 import { useCacheInvalidationStore } from '@/store/useCacheInvalidationStore';
+import { isDemoUser } from '@/utils/roleUtils';
 
 export interface SyncResult {
   status: 'success' | 'partialSuccess' | 'offline' | 'failed' | 'authenticationRequired';
@@ -55,7 +56,10 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
 
   refreshPendingCount: async () => {
     const user = useAuthStore.getState().user;
-    if (!user) return;
+    if (!user || isDemoUser(user)) {
+      if (isDemoUser(user)) set({ pendingCount: 0 });
+      return;
+    }
     try {
       const db = await getDBConnection();
       const countRow = await db.getFirstAsync<{c: number}>(
@@ -118,6 +122,12 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
         if (!user) {
           set({ syncStatus: "Chưa đăng nhập." });
           finalResult.status = 'authenticationRequired';
+          return finalResult;
+        }
+
+        if (isDemoUser(user)) {
+          set({ syncStatus: "Chế độ trải nghiệm (Demo Sandbox) không đồng bộ lên backend chính." });
+          finalResult.status = 'success';
           return finalResult;
         }
 

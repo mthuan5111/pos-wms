@@ -5,7 +5,8 @@ export interface SQLiteDatabaseAdapter {
   getFirstAsync<T = any>(sql: string, ...params: any[]): Promise<T | null>;
 }
 
-export const TARGET_SCHEMA_VERSION = 6;
+export const TARGET_SCHEMA_VERSION = 7;
+export const TARGET_DATA_GENERATION = "20260922_GEN2";
 
 export async function safeAddColumn(
   db: SQLiteDatabaseAdapter,
@@ -28,6 +29,33 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
   try {
     await db.execAsync("PRAGMA journal_mode = WAL;");
     await db.execAsync("PRAGMA foreign_keys = ON;");
+
+    // Data generation check (prevents stale local sync queues from polluting refreshed backend)
+    await db.execAsync("CREATE TABLE IF NOT EXISTS _data_generation (generation TEXT);");
+    const genRow = await db.getFirstAsync<{ generation: string }>("SELECT generation FROM _data_generation LIMIT 1");
+    if (genRow?.generation !== TARGET_DATA_GENERATION) {
+      console.log(`[DB] Data generation thay đổi (${genRow?.generation || 'none'} -> ${TARGET_DATA_GENERATION}). Làm sạch dữ liệu local cũ...`);
+      try {
+        await db.execAsync(`
+          PRAGMA foreign_keys = OFF;
+          DELETE FROM LocalOrderDetails;
+          DELETE FROM LocalOrders;
+          DELETE FROM LocalGoodsReceiptDetails;
+          DELETE FROM LocalGoodsReceipts;
+          DELETE FROM LocalStockAdjustments;
+          DELETE FROM LocalProducts;
+          DELETE FROM LocalCategories;
+          DELETE FROM LocalSuppliers;
+          DELETE FROM LocalCustomers;
+          DELETE FROM _data_generation;
+          INSERT INTO _data_generation (generation) VALUES ('${TARGET_DATA_GENERATION}');
+          PRAGMA foreign_keys = ON;
+        `);
+        console.log(`[DB] Đã làm sạch local database an toàn cho generation ${TARGET_DATA_GENERATION}`);
+      } catch (purgeErr) {
+        console.warn("[DB] Cảnh báo khi dọn dẹp local tables:", purgeErr);
+      }
+    }
 
     // Version management
     await db.execAsync("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER);");
@@ -52,6 +80,7 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
         Barcode TEXT,
         StockQuantity INTEGER NOT NULL,
         ImageUrl TEXT,
+        ImagePublicId TEXT,
         LowStockThreshold INTEGER DEFAULT 10,
         IsSalePriceConfigured INTEGER DEFAULT 1,
         FOREIGN KEY (CategoryId) REFERENCES LocalCategories(Id)
@@ -142,6 +171,85 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
         FinalReportSnapshot TEXT,
         ClosingRemarks TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxSessions (
+        SessionId TEXT PRIMARY KEY,
+        CreatedAt TEXT NOT NULL,
+        LastActivityAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxOrders (
+        OfflineReferenceId TEXT PRIMARY KEY,
+        SessionId TEXT NOT NULL,
+        CustomerName TEXT,
+        TotalAmount REAL NOT NULL,
+        PaymentMethod TEXT DEFAULT 'CASH',
+        CreatedAt TEXT NOT NULL,
+        IsSynced INTEGER DEFAULT 0,
+        SyncStatus TEXT DEFAULT 'Pending',
+        ShiftCode TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxOrderDetails (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        OfflineReferenceId TEXT NOT NULL,
+        SessionId TEXT NOT NULL,
+        ProductId TEXT NOT NULL,
+        ProductName TEXT NOT NULL,
+        Quantity INTEGER NOT NULL,
+        Price REAL NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxShifts (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        SessionId TEXT NOT NULL,
+        ShiftCode TEXT NOT NULL,
+        UserId INTEGER,
+        StartedAt TEXT NOT NULL,
+        EndedAt TEXT,
+        Status TEXT DEFAULT 'Open',
+        StartingCash REAL NOT NULL,
+        EndingCash REAL,
+        ExpectedCash REAL,
+        Difference REAL,
+        SummarySnapshot TEXT,
+        Remarks TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxGoodsReceipts (
+        OfflineReferenceId TEXT PRIMARY KEY,
+        SessionId TEXT NOT NULL,
+        SupplierId INTEGER NOT NULL,
+        SupplierName TEXT,
+        TotalAmount REAL NOT NULL,
+        Remarks TEXT,
+        CreatedAt TEXT NOT NULL,
+        Status TEXT DEFAULT 'Completed',
+        IsSynced INTEGER DEFAULT 0,
+        ShiftCode TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxGoodsReceiptDetails (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        OfflineReferenceId TEXT NOT NULL,
+        SessionId TEXT NOT NULL,
+        ProductId TEXT NOT NULL,
+        ProductName TEXT NOT NULL,
+        Quantity INTEGER NOT NULL,
+        MockCostPrice REAL NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxStockAdjustments (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        OfflineReferenceId TEXT NOT NULL,
+        SessionId TEXT NOT NULL,
+        ProductId TEXT NOT NULL,
+        Delta INTEGER NOT NULL,
+        Reason TEXT,
+        CreatedAt TEXT NOT NULL,
+        BeforeQty INTEGER NOT NULL,
+        AfterQty INTEGER NOT NULL
+      );
     `);
 
     // Ensure all schema columns exist across older installs (idempotent safeAddColumn)
@@ -151,6 +259,7 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
     await safeAddColumn(db, "LocalProducts", "SupplierId", "INTEGER");
     await safeAddColumn(db, "LocalProducts", "LowStockThreshold", "INTEGER DEFAULT 10");
     await safeAddColumn(db, "LocalProducts", "IsSalePriceConfigured", "INTEGER DEFAULT 1");
+    await safeAddColumn(db, "LocalProducts", "ImagePublicId", "TEXT");
 
     await safeAddColumn(db, "LocalOrders", "CustomerId", "INTEGER");
     await safeAddColumn(db, "LocalOrders", "OwnerUserId", "INTEGER");

@@ -300,6 +300,11 @@ namespace POS_WMS.WebApi.Controllers
         {
             try
             {
+                if (User?.IsInRole("DemoUser") == true || User?.FindFirst("is_demo")?.Value == "true")
+                {
+                    return StatusCode(403, ApiResponse<bool>.Failure("Tài khoản Demo không được phép đổi mật khẩu.", "FORBIDDEN_DEMO_USER"));
+                }
+
                 var callerIdStr = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (!int.TryParse(callerIdStr, out var callerId) || callerId != id)
                 {
@@ -309,6 +314,11 @@ namespace POS_WMS.WebApi.Controllers
                 var user = await _userRepository.GetByIdAsync(id);
                 if (user == null)
                     return NotFound(ApiResponse<bool>.Failure("Không tìm thấy tài khoản", "USER_NOT_FOUND"));
+
+                if (user.Role == POS_WMS.Domain.Enums.UserRole.DemoUser)
+                {
+                    return StatusCode(403, ApiResponse<bool>.Failure("Tài khoản Demo không được phép đổi mật khẩu để đảm bảo quyền truy cập chung.", "FORBIDDEN_DEMO_USER"));
+                }
 
                 if (string.IsNullOrWhiteSpace(request.CurrentPassword))
                 {

@@ -9,7 +9,7 @@ namespace POS_WMS.WebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize(Roles = "Admin,Manager")]
+    [Authorize(Roles = "Admin,Manager,DemoUser")]
     public class ReportsController : ControllerBase
     {
         private readonly IReportService _reportService;
@@ -25,6 +25,14 @@ namespace POS_WMS.WebApi.Controllers
             try
             {
                 var result = await _reportService.GetDashboardSummaryAsync(startDate, endDate);
+                if (User.IsInRole("DemoUser"))
+                {
+                    result.GrossProfit = null;
+                    result.GrossMarginPercent = null;
+                    result.HasGrossProfitData = false;
+                    result.TotalInventoryValue = null;
+                    result.HasInventoryValueData = false;
+                }
                 return Ok(ApiResponse<object>.Success(result));
             }
             catch (Exception ex)
@@ -78,6 +86,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpGet("purchase-summary")]
+        [Authorize(Roles = "Admin,Manager")]
         public async Task<IActionResult> GetPurchaseSummary([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
         {
             try

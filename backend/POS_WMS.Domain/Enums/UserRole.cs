@@ -5,5 +5,6 @@ public enum UserRole
     Admin = 0,
     Manager = 1,
     Cashier = 2,
-    WarehouseStaff = 3
+    WarehouseStaff = 3,
+    DemoUser = 4
 }

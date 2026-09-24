@@ -41,6 +41,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost("open")]
+        [Authorize(Roles = "Admin,Manager,Cashier,WarehouseStaff")]
         public async Task<IActionResult> OpenShift([FromBody] OpenShiftRequestDto request)
         {
             var userId = GetUserId();
@@ -69,6 +70,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost("{id}/end")]
+        [Authorize(Roles = "Admin,Manager,Cashier,WarehouseStaff")]
         public async Task<IActionResult> EndShift(int id, [FromBody] EndShiftRequestDto request)
         {
             try
@@ -80,6 +82,27 @@ namespace POS_WMS.WebApi.Controllers
             catch (KeyNotFoundException ex)
             {
                 return NotFound(ApiResponse<ShiftReportDto>.Failure(ex.Message, "SHIFT_NOT_FOUND"));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<ShiftReportDto>.Failure($"Lỗi: {ex.Message}"));
+            }
+        }
+
+        [HttpPost("close")]
+        [Authorize(Roles = "Admin,Manager,Cashier,WarehouseStaff")]
+        public async Task<IActionResult> CloseCurrentShift([FromBody] EndShiftRequestDto request)
+        {
+            try
+            {
+                var userId = GetUserId();
+                var currentShift = await _shiftService.GetCurrentShiftAsync(userId);
+                if (currentShift == null)
+                {
+                    return BadRequest(ApiResponse<ShiftReportDto>.Failure("Không tìm thấy ca làm việc đang mở để kết thúc.", "SHIFT_NOT_FOUND"));
+                }
+                var report = await _shiftService.EndShiftAsync(currentShift.Id, userId, request);
+                return Ok(ApiResponse<ShiftReportDto>.Success(report, "Đã kết thúc ca làm việc."));
             }
             catch (Exception ex)
             {

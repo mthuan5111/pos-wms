@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import { initLocalDatabase, pullMasterData } from "@/database/db";
+import { initLocalDatabase, pullMasterData, hasCachedMasterData } from "@/database/db";
 import { useAuthStore } from "./authStore";
 import { useGlobalSyncStore } from "./useGlobalSyncStore";
 import { useCacheInvalidationStore } from "./useCacheInvalidationStore";
+import { isDemoUser } from "@/utils/roleUtils";
 
 export type BootstrapStatus =
     | "idle"
@@ -24,12 +25,17 @@ interface BootstrapState {
     startBootstrap: (isLogin?: boolean) => Promise<void>;
     retryBootstrap: () => Promise<void>;
     continueOffline: () => void;
+    reset: () => void;
 }
 
 export const useBootstrapStore = create<BootstrapState>((set, get) => ({
     status: "idle",
     failedModules: [],
     activePromise: null,
+
+    reset: () => {
+        set({ status: "idle", failedModules: [], activePromise: null });
+    },
 
     startBootstrap: async (isLogin = false) => {
         const { status, activePromise } = get();
@@ -61,7 +67,7 @@ export const useBootstrapStore = create<BootstrapState>((set, get) => ({
                 let failedMods: string[] = [];
 
                 try {
-                    const userRole = auth.user?.role || "Admin";
+                    const userRole = auth.user?.role || "DemoUser";
                     const res = await pullMasterData(userRole);
                     if (res?.failedModules?.length > 0) {
                         failedMods = res.failedModules;
@@ -73,18 +79,25 @@ export const useBootstrapStore = create<BootstrapState>((set, get) => ({
                 }
 
                 if (masterDataStatus === "failed") {
-                    set({ status: "failed", failedModules: failedMods });
-                    return;
+                    const hasCache = await hasCachedMasterData();
+                    if (hasCache) {
+                        console.warn("[Bootstrap] Không thể cập nhật từ máy chủ, nhưng đã tìm thấy dữ liệu đã lưu trong máy. Chuyển sang chế độ ngoại tuyến.");
+                        set({ status: "partial", failedModules: failedMods });
+                    } else {
+                        set({ status: "failed", failedModules: failedMods });
+                        return;
+                    }
                 }
 
-                // 4. Sync pending
-                set({ status: "syncing" });
-                try {
-                    // Always try to sync pending queue on login/startup
-                    const syncStore = useGlobalSyncStore.getState();
-                    await syncStore.syncNow(isLogin ? "login" : "app-startup");
-                } catch (e) {
-                    console.error("Bootstrap sync error:", e);
+                // 4. Sync pending (Skip for demo accounts)
+                if (!isDemoUser(auth.user)) {
+                    set({ status: "syncing" });
+                    try {
+                        const syncStore = useGlobalSyncStore.getState();
+                        await syncStore.syncNow(isLogin ? "login" : "app-startup");
+                    } catch (e) {
+                        console.error("Bootstrap sync error:", e);
+                    }
                 }
 
                 // 5. Invalidate entire app

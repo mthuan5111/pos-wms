@@ -17,7 +17,7 @@ namespace POS_WMS.WebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize(Roles = "Admin,Manager,WarehouseStaff")]
+    [Authorize(Roles = "Admin,Manager,WarehouseStaff,DemoUser")]
     public class SuppliersController : ControllerBase
     {
         private readonly IGenericRepository<Supplier> _supplierRepository;

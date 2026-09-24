@@ -20,7 +20,7 @@ namespace POS_WMS.Infrastructure.Services
             _context = context;
         }
 
-        public async Task RecordMovementAsync(int productId, StockMovementType type, int quantity, string referenceType, int? referenceId, int balanceAfter, string createdBy, int? shiftId = null)
+        public async Task RecordMovementAsync(int productId, StockMovementType type, int quantity, string referenceType, int? referenceId, int balanceAfter, string createdBy, int? shiftId = null, string? offlineReferenceId = null)
         {
             var movement = new StockMovement
             {
@@ -31,6 +31,7 @@ namespace POS_WMS.Infrastructure.Services
                 ReferenceId = referenceId,
                 BalanceAfter = balanceAfter,
                 CreatedBy = createdBy,
+                OfflineReferenceId = offlineReferenceId,
                 CreatedAt = DateTime.UtcNow,
                 ShiftId = shiftId
             };

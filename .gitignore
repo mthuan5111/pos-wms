@@ -58,7 +58,6 @@ expo-env.d.ts
 !**/.env.example
 **/appsettings.json
 **/appsettings.Development.json
-**/appsettings.Production.json
 !**/appsettings.example.json
 **/secrets.json
 **/credentials.json
@@ -93,6 +92,20 @@ TestResults/
 coverage/
 *.coverage
 *.coveragexml
+**/accounts_secure*.txt
+**/*token*.txt
+**/test_db_*.json
+**/production_db_*.json
+
+# Test artifacts
+auth_test_report.json
+*_db_snapshot.json
+sandbox_integration_test.sqlite
+tests/**/*.sqlite*
+tests/**/*.bak
+tests/**/*_report.json
+tests/**/test_db_*.json
+scratch/
 
 # Generated SQL migration scripts
 backend/MigrationScript.sql

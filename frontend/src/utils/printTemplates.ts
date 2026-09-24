@@ -3,6 +3,7 @@
  * Follows retail standard 80mm & 58mm thermal receipt layout and A4 document styling.
  * Pure B&W high contrast for thermal printer compatibility.
  */
+import { getRoleDisplayName } from './roleUtils';
 
 export interface ReceiptItemPrintDto {
   stt?: number;
@@ -39,6 +40,7 @@ export interface SalesReceiptPrintData {
   changeAmount?: number;
   note?: string;
   notes?: string;
+  isDemo?: boolean;
 }
 
 export interface GoodsReceiptPrintData {
@@ -51,16 +53,18 @@ export interface GoodsReceiptPrintData {
   supplierName?: string;
   status?: string;
   remarks?: string;
+  hideCostPrice?: boolean;
+  isDemo?: boolean;
   items: Array<{
     stt?: number;
     productName: string;
     barcode?: string;
     quantity: number;
-    costPrice: number;
-    lineTotal: number;
+    costPrice?: number | null;
+    lineTotal?: number | null;
   }>;
   totalQuantity: number;
-  totalAmount: number;
+  totalAmount?: number | null;
 }
 
 export interface ShiftReportPrintData {
@@ -73,6 +77,7 @@ export interface ShiftReportPrintData {
   status?: string;
   closingRemarks?: string | null;
   notes?: string;
+  isDemo?: boolean;
 
   // Cashier / Sales section
   orderCount?: number;
@@ -378,6 +383,18 @@ export function generateSalesReceiptHtml(
     </div>
   ` : '';
 
+  const isDemo = data.isDemo || receiptNum.startsWith('DEMO-') || receiptNum.startsWith('DEMO_');
+  const demoBannerHtml = isDemo ? `
+    <div style="border: 2px dashed #000; padding: 6px 8px; margin-bottom: 12px; text-align: center; font-weight: 800; font-size: 11px; text-transform: uppercase; background-color: #f3f4f6;">
+      *** PHIẾU TRẢI NGHIỆM - KHÔNG CÓ GIÁ TRỊ GIAO DỊCH ***
+    </div>
+  ` : '';
+  const demoFooterHtml = isDemo ? `
+    <div style="margin-top: 12px; padding-top: 6px; border-top: 1px dashed #000; text-align: center; font-weight: 700; font-size: 10px; text-transform: uppercase;">
+      DỮ LIỆU TRẢI NGHIỆM (DEMO SANDBOX) - KHÔNG PHẢI CHỨNG TỪ THỰC
+    </div>
+  ` : '';
+
   return `
     <!DOCTYPE html>
     <html>
@@ -388,6 +405,7 @@ export function generateSalesReceiptHtml(
         <style>${COMMON_PRINT_CSS}</style>
       </head>
       <body>
+        ${demoBannerHtml}
         <div class="store-header">
           <div class="store-title">${storeName}</div>
           <div class="store-sub">${storeAddress}</div>
@@ -447,6 +465,7 @@ export function generateSalesReceiptHtml(
           <div class="footer-msg">CẢM ƠN QUÝ KHÁCH &amp; HẸN GẶP LẠI!</div>
           <div>Quý khách vui lòng kiểm tra hóa đơn và hàng hóa trước khi rời quầy.</div>
           ${data.note ? `<div style="margin-top: 4px; font-style: italic;">* ${escapeHtml(data.note)}</div>` : ''}
+          ${demoFooterHtml}
         </div>
       </body>
     </html>
@@ -467,6 +486,7 @@ export function generateGoodsReceiptHtml(
   const creator = escapeHtml(data.creatorName || 'Thủ kho');
   const supplier = escapeHtml(data.supplierName || 'Nhà cung cấp');
   const remarks = escapeHtml(data.remarks || 'Nhập hàng vào kho');
+  const showCost = !data.hideCostPrice;
 
   let rowsHtml = '';
   data.items.forEach((item, index) => {
@@ -474,8 +494,8 @@ export function generateGoodsReceiptHtml(
     const name = escapeHtml(item.productName);
     const barcode = item.barcode ? `<div class="item-barcode">${escapeHtml(item.barcode)}</div>` : '';
     const qty = item.quantity;
-    const cost = formatVnd(item.costPrice);
-    const lineTotal = formatVnd(item.lineTotal || (item.quantity * item.costPrice));
+    const cost = item.costPrice != null ? formatVnd(item.costPrice) : '---';
+    const lineTotal = item.lineTotal != null ? formatVnd(item.lineTotal) : item.costPrice != null ? formatVnd(item.quantity * item.costPrice) : '---';
 
     rowsHtml += `
       <tr>
@@ -485,11 +505,22 @@ export function generateGoodsReceiptHtml(
           ${barcode}
         </td>
         <td class="col-qty">${qty}</td>
-        <td class="col-price">${cost}</td>
-        <td class="col-total">${lineTotal}</td>
+        ${showCost ? `<td class="col-price">${cost}</td><td class="col-total">${lineTotal}</td>` : ''}
       </tr>
     `;
   });
+
+  const isDemo = data.isDemo || receiptNum.startsWith('DEMO-') || receiptNum.startsWith('DEMO_');
+  const demoBannerHtml = isDemo ? `
+    <div style="border: 2px dashed #000; padding: 6px 8px; margin-bottom: 12px; text-align: center; font-weight: 800; font-size: 11px; text-transform: uppercase; background-color: #f3f4f6;">
+      *** PHIẾU NHẬP TRẢI NGHIỆM - KHÔNG PHẢI CHỨNG TỪ THỰC ***
+    </div>
+  ` : '';
+  const demoFooterHtml = isDemo ? `
+    <div style="margin-top: 16px; padding-top: 6px; border-top: 1px dashed #000; text-align: center; font-weight: 700; font-size: 10px; text-transform: uppercase;">
+      DỮ LIỆU TRẢI NGHIỆM (DEMO SANDBOX) - KHÔNG PHẢI CHỨNG TỪ THỰC
+    </div>
+  ` : '';
 
   return `
     <!DOCTYPE html>
@@ -501,6 +532,7 @@ export function generateGoodsReceiptHtml(
         <style>${COMMON_PRINT_CSS}</style>
       </head>
       <body>
+        ${demoBannerHtml}
         <div class="store-header">
           <div class="store-title">${storeName}</div>
           <div class="store-sub">Phân hệ Quản lý Kho (${warehouse})</div>
@@ -533,8 +565,7 @@ export function generateGoodsReceiptHtml(
               <th class="col-stt">#</th>
               <th class="col-name">Mặt hàng nhập</th>
               <th class="col-qty">SL</th>
-              <th class="col-price">Giá nhập</th>
-              <th class="col-total">T.Tiền</th>
+              ${showCost ? '<th class="col-price">Giá nhập</th><th class="col-total">T.Tiền</th>' : ''}
             </tr>
           </thead>
           <tbody>
@@ -547,10 +578,12 @@ export function generateGoodsReceiptHtml(
             <span>Tổng số lượng nhập:</span>
             <span class="bold">${data.totalQuantity} sản phẩm</span>
           </div>
+          ${showCost && data.totalAmount != null ? `
           <div class="summary-row highlight">
             <span>TỔNG GIÁ TRỊ NHẬP:</span>
             <span>${formatVnd(data.totalAmount)}</span>
           </div>
+          ` : ''}
         </div>
 
         <div class="signatures">
@@ -565,6 +598,7 @@ export function generateGoodsReceiptHtml(
             <div>(Ký, ghi rõ họ tên)</div>
           </div>
         </div>
+        ${demoFooterHtml}
       </body>
     </html>
   `;
@@ -580,13 +614,25 @@ export function generateShiftReportHtml(
   const storeName = escapeHtml(data.storeName || 'POS & WMS STORE');
   const shiftId = escapeHtml(String(data.shiftId));
   const user = escapeHtml(data.userName);
-  const roleName = data.role === 'Cashier' ? 'Thu ngân' : data.role === 'WarehouseStaff' ? 'Thủ kho' : 'Quản lý';
+  const roleName = getRoleDisplayName(data.role);
   const started = escapeHtml(formatPrintDateTime(data.startedAt));
   const ended = escapeHtml(formatPrintDateTime(data.endedAt || new Date().toISOString()));
   const statusStr = escapeHtml(data.status || 'Đã kết thúc');
 
   const isWarehouseRole = data.role === 'WarehouseStaff';
   const isCashierRole = data.role === 'Cashier';
+
+  const isDemo = data.isDemo || String(data.shiftId).startsWith('DEMO-') || String(data.shiftId).startsWith('DEMO_');
+  const demoBannerHtml = isDemo ? `
+    <div style="border: 2px dashed #000; padding: 6px 8px; margin-bottom: 12px; text-align: center; font-weight: 800; font-size: 11px; text-transform: uppercase; background-color: #f3f4f6;">
+      *** BÁO CÁO CA TRẢI NGHIỆM - KHÔNG CÓ GIÁ TRỊ GIAO DỊCH ***
+    </div>
+  ` : '';
+  const demoFooterHtml = isDemo ? `
+    <div style="margin-top: 16px; padding-top: 6px; border-top: 1px dashed #000; text-align: center; font-weight: 700; font-size: 10px; text-transform: uppercase;">
+      DỮ LIỆU TRẢI NGHIỆM (DEMO SANDBOX) - KHÔNG PHẢI CHỨNG TỪ THỰC
+    </div>
+  ` : '';
 
   return `
     <!DOCTYPE html>
@@ -609,6 +655,7 @@ export function generateShiftReportHtml(
         </style>
       </head>
       <body>
+        ${demoBannerHtml}
         <div class="store-header">
           <div class="store-title">${storeName}</div>
           <div class="doc-title">BÁO CÁO KẾT CA LÀM VIỆC</div>
@@ -706,6 +753,7 @@ export function generateShiftReportHtml(
             <div>(Ký, ghi rõ họ tên)</div>
           </div>
         </div>
+        ${demoFooterHtml}
       </body>
     </html>
   `;

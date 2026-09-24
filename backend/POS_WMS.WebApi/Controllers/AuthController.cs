@@ -31,6 +31,17 @@ namespace POS_WMS.WebApi.Controllers
 
             return Ok(ApiResponse<AuthResponseDTO>.Success(response, "Đăng nhập thành công"));
         }
+
+        [HttpPost("demo-login")]
+        public async Task<IActionResult> DemoLogin()
+        {
+            var response = await _authService.DemoLoginAsync();
+            if (response == null)
+            {
+                return StatusCode(429, ApiResponse<AuthResponseDTO>.Failure("Hệ thống ghi nhận quá nhiều yêu cầu Demo. Vui lòng thử lại sau.", "RATE_LIMIT_EXCEEDED"));
+            }
+            return Ok(ApiResponse<AuthResponseDTO>.Success(response, "Đăng nhập chế độ trải nghiệm thành công"));
+        }
         [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] TokenRequestDTO request)
         {

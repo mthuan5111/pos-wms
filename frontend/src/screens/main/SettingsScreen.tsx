@@ -15,6 +15,12 @@ import FieldLabel, { FieldError } from '@/components/FieldLabel';
 import { changeUserPassword } from '@/services/userApi';
 import ResponsiveFormWrapper from '@/components/ResponsiveFormWrapper';
 
+import { Platform } from 'react-native';
+import { getRoleDisplayName, isDemoUser } from '@/utils/roleUtils';
+import { useDemoSandboxStore } from '@/store/useDemoSandboxStore';
+import DemoResetConfirmModal from '@/components/DemoResetConfirmModal';
+import DemoExperienceGuideModal from '@/components/DemoExperienceGuideModal';
+
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const [unsyncedCount, setUnsyncedCount] = useState(0);
@@ -25,6 +31,23 @@ export default function SettingsScreen() {
   const { handleLogout } = useSafeLogout();
   const { showModal } = useModalStore();
   const isDesktop = useIsDesktop();
+
+  const isDemo = isDemoUser(user);
+  const isResetModalVisible = useDemoSandboxStore(state => state.isResetModalVisible);
+  const setResetModalVisible = useDemoSandboxStore(state => state.setResetModalVisible);
+  const isGuideModalVisible = useDemoSandboxStore(state => state.isGuideModalVisible);
+  const setGuideModalVisible = useDemoSandboxStore(state => state.setGuideModalVisible);
+  const demoSessionId = useDemoSandboxStore(state => state.demoSessionId);
+  const initDemoSession = useDemoSandboxStore(state => state.initSession);
+  const sandboxPendingSync = useDemoSandboxStore(state => state.pendingSyncCount);
+
+  React.useEffect(() => {
+    if (isDemo) {
+      setIsPasswordModalVisible(false);
+      resetPasswordState();
+      initDemoSession();
+    }
+  }, [isDemo]);
 
   // Password change modal state
   const [isPasswordModalVisible, setIsPasswordModalVisible] = useState(false);
@@ -137,15 +160,7 @@ export default function SettingsScreen() {
     }
   };
 
-  const roleDisplay = user?.role === 'Admin'
-    ? 'Quản trị viên hệ thống'
-    : user?.role === 'Manager'
-    ? 'Quản lý cửa hàng'
-    : user?.role === 'Cashier'
-    ? 'Nhân viên thu ngân'
-    : user?.role === 'WarehouseStaff'
-    ? 'Nhân viên thủ kho'
-    : user?.role || 'Chưa xác định';
+  const roleDisplay = getRoleDisplayName(user?.role);
 
   return (
     <SafeAreaView testID="settings-screen" className="flex-1 bg-white">
@@ -179,7 +194,9 @@ export default function SettingsScreen() {
               <Ionicons name="person-outline" size={16} color="#000" />
               <Text className="ml-2 text-xs font-bold text-gray-700">Họ tên</Text>
             </View>
-            <Text className="text-black font-bold text-xs sm:text-sm">{user?.name || 'N/A'}</Text>
+            <Text className="text-black font-bold text-xs sm:text-sm">
+              {isDemo ? 'Khách Trải Nghiệm' : (user?.name || 'N/A')}
+            </Text>
           </View>
 
           <View className="mb-3 flex-row justify-between items-center">
@@ -203,33 +220,111 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Section: Security & Password */}
-        <View className="border-2 border-black p-4 sm:p-5 mb-4 sm:mb-6 bg-white">
-          <Text className="font-black text-black mb-3 uppercase tracking-widest text-xs">
-            Bảo mật tài khoản
-          </Text>
-          <View style={{ width: '100%', height: 2, backgroundColor: '#000', marginBottom: 14 }} />
+        {/* Section: Demo Sandbox Scope (DemoUser only) */}
+        {isDemo && (
+          <View className="border-2 border-black p-4 sm:p-5 mb-4 sm:mb-6 bg-white">
+            <Text className="font-black text-black mb-3 uppercase tracking-widest text-xs">
+              Phạm vi trải nghiệm
+            </Text>
+            <View style={{ width: '100%', height: 2, backgroundColor: '#000', marginBottom: 14 }} />
 
-          <View className="flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <View className="flex-1 mr-2">
-              <Text className="text-xs font-bold text-black uppercase tracking-wide">Mật khẩu đăng nhập</Text>
-              <Text className="text-[11px] text-gray-500 mt-0.5">Thay đổi mật khẩu tài khoản của bạn</Text>
-            </View>
-            <TouchableOpacity
-              testID="settings-btn-open-change-password"
-              onPress={() => {
-                resetPasswordState();
-                setIsPasswordModalVisible(true);
-              }}
-              className="bg-black py-2.5 px-4 border border-black flex-row items-center justify-center self-stretch sm:self-auto"
-            >
-              <Ionicons name="key-outline" size={14} color="#fff" />
-              <Text className="text-white font-bold text-xs uppercase tracking-wider ml-1.5">
-                Đổi mật khẩu
+            <View className="bg-gray-50 border border-gray-300 p-3 mb-3">
+              <View className="flex-row items-center mb-1">
+                <Ionicons name="eye-outline" size={16} color="#000" style={{ marginRight: 8 }} />
+                <Text className="text-xs text-gray-800 font-bold">Dữ liệu chính: Chỉ đọc an toàn</Text>
+              </View>
+              <Text className="text-[11px] text-gray-600 leading-4">
+                Xem thông tin danh mục, nhà cung cấp, sản phẩm và hóa đơn showcase. Các số liệu giá vốn, giá nhập và lợi nhuận được ẩn an toàn.
               </Text>
-            </TouchableOpacity>
+            </View>
+
+            <View className="bg-blue-50 border border-blue-300 p-3">
+              <View className="flex-row items-center mb-1">
+                <Ionicons name="cube-outline" size={16} color="#0284c7" style={{ marginRight: 8 }} />
+                <Text className="text-xs text-blue-900 font-bold">Thao tác: Lưu trữ trong Demo Sandbox</Text>
+              </View>
+              <Text className="text-[11px] text-blue-800 leading-4">
+                Các thao tác bán hàng, lập phiếu nhập, điều chỉnh kho và đóng/mở ca làm việc chỉ tồn tại trong bộ nhớ Sandbox của phiên hiện tại, hoàn toàn không làm thay đổi SQL Server chính.
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
+
+        {/* Section: Demo Actions (DemoUser only) */}
+        {isDemo && (
+          <View className="border-2 border-black p-4 sm:p-5 mb-4 sm:mb-6 bg-white">
+            <Text className="font-black text-black mb-3 uppercase tracking-widest text-xs">
+              Hành động trải nghiệm
+            </Text>
+            <View style={{ width: '100%', height: 2, backgroundColor: '#000', marginBottom: 14 }} />
+
+            <View style={{ gap: 10 }}>
+              <TouchableOpacity
+                testID="demo-btn-open-guide"
+                onPress={() => setGuideModalVisible(true)}
+                className="border-2 border-black py-2.5 px-4 bg-white flex-row items-center justify-between"
+              >
+                <View className="flex-row items-center">
+                  <Ionicons name="compass-outline" size={18} color="#000" style={{ marginRight: 8 }} />
+                  <Text className="text-xs font-bold uppercase tracking-wider text-black">
+                    Xem hướng dẫn trải nghiệm
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color="#000" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                testID="demo-btn-reset-sandbox"
+                onPress={() => setResetModalVisible(true)}
+                className="border-2 border-black py-2.5 px-4 bg-amber-50 flex-row items-center justify-between"
+              >
+                <View className="flex-row items-center">
+                  <Ionicons name="refresh-outline" size={18} color="#b45309" style={{ marginRight: 8 }} />
+                  <View>
+                    <Text className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                      Làm mới phiên trải nghiệm
+                    </Text>
+                    <Text className="text-[10px] text-amber-700">
+                      Xóa sạch dữ liệu thử nghiệm trong sandbox phiên hiện tại
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="trash-outline" size={16} color="#b45309" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Section: Security & Password (HIDDEN for DemoUser - No blank space left) */}
+        {!isDemo && (
+          <View className="border-2 border-black p-4 sm:p-5 mb-4 sm:mb-6 bg-white">
+            <Text className="font-black text-black mb-3 uppercase tracking-widest text-xs">
+              Bảo mật tài khoản
+            </Text>
+            <View style={{ width: '100%', height: 2, backgroundColor: '#000', marginBottom: 14 }} />
+
+            <View className="flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <View className="flex-1 mr-2">
+                <Text className="text-xs font-bold text-black uppercase tracking-wide">Mật khẩu đăng nhập</Text>
+                <Text className="text-[11px] text-gray-500 mt-0.5">Thay đổi mật khẩu tài khoản của bạn</Text>
+              </View>
+              <TouchableOpacity
+                testID="settings-btn-open-change-password"
+                onPress={() => {
+                  if (isDemo) return;
+                  resetPasswordState();
+                  setIsPasswordModalVisible(true);
+                }}
+                className="bg-black py-2.5 px-4 border border-black flex-row items-center justify-center self-stretch sm:self-auto"
+              >
+                <Ionicons name="key-outline" size={14} color="#fff" />
+                <Text className="text-white font-bold text-xs uppercase tracking-wider ml-1.5">
+                  Đổi mật khẩu
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* Section: Application info */}
         <View className="border-2 border-black p-4 sm:p-5 mb-4 sm:mb-6 bg-white">
@@ -242,10 +337,24 @@ export default function SettingsScreen() {
             <Text className="text-xs font-bold text-gray-700">Hệ thống</Text>
             <Text className="text-xs font-bold text-black sm:text-right flex-1">POS & WMS Quản lý bán hàng và kho</Text>
           </View>
-          <View className="flex-row justify-between items-center">
+          <View className="flex-row justify-between items-center mb-2">
             <Text className="text-xs font-bold text-gray-700">Phiên bản</Text>
             <Text className="text-xs font-bold text-black font-mono">1.0.0 (Acceptance Build)</Text>
           </View>
+          <View className="flex-row justify-between items-center mb-2">
+            <Text className="text-xs font-bold text-gray-700">Nền tảng</Text>
+            <Text className="text-xs font-bold text-black font-mono">
+              {Platform.OS === 'web' ? 'Web (Trình duyệt)' : Platform.OS === 'android' ? 'Android Native' : 'iOS'}
+            </Text>
+          </View>
+          {isDemo && demoSessionId ? (
+            <View className="flex-row justify-between items-center">
+              <Text className="text-xs font-bold text-gray-700">Mã phiên Sandbox</Text>
+              <Text className="text-xs font-bold text-black font-mono">
+                {demoSessionId.substring(0, 16)}...
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         {/* Data Recovery notice (Admin only) */}
@@ -264,12 +373,27 @@ export default function SettingsScreen() {
           </View>
         )}
 
-        {/* Unsynced queue status indicator */}
-        {unsyncedCount > 0 && (
+        {/* Unsynced queue status indicator (Production) */}
+        {!isDemo && unsyncedCount > 0 && (
           <View className="flex-row items-center justify-center p-3 mb-4 border border-black bg-gray-100">
             <Ionicons name="cloud-offline-outline" size={20} color="#000" />
             <Text className="ml-2 font-bold text-black uppercase text-xs tracking-wider">
               Chờ đồng bộ: {unsyncedCount}
+            </Text>
+          </View>
+        )}
+
+        {/* Unsynced sandbox indicator (DemoUser) */}
+        {isDemo && sandboxPendingSync > 0 && (
+          <View className="p-3 mb-4 border border-blue-600 bg-blue-50 flex-col items-center justify-center">
+            <View className="flex-row items-center mb-1">
+              <Ionicons name="cloud-offline-outline" size={18} color="#2563eb" />
+              <Text className="ml-2 font-bold text-blue-900 uppercase text-xs tracking-wider">
+                Chờ đồng bộ trải nghiệm: {sandboxPendingSync}
+              </Text>
+            </View>
+            <Text className="text-[11px] text-blue-700 text-center">
+              (Dữ liệu sandbox sẵn sàng mô phỏng đồng bộ ngoại tuyến)
             </Text>
           </View>
         )}
@@ -288,18 +412,31 @@ export default function SettingsScreen() {
         )}
       </ScrollView>
 
-      <RecoveryModal visible={isRecoveryVisible} onClose={() => { setIsRecoveryVisible(false); checkUnsyncedData(); }} />
+      {!isDemo && (
+        <RecoveryModal visible={isRecoveryVisible} onClose={() => { setIsRecoveryVisible(false); checkUnsyncedData(); }} />
+      )}
 
-      {/* Change Password Modal */}
-      <Modal
-        visible={isPasswordModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          resetPasswordState();
-          setIsPasswordModalVisible(false);
-        }}
-      >
+      <DemoResetConfirmModal
+        visible={isResetModalVisible}
+        onClose={() => setResetModalVisible(false)}
+      />
+
+      <DemoExperienceGuideModal
+        visible={isGuideModalVisible}
+        onClose={() => setGuideModalVisible(false)}
+      />
+
+      {/* Change Password Modal (Strictly excluded for DemoUser) */}
+      {!isDemo && (
+        <Modal
+          visible={isPasswordModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            resetPasswordState();
+            setIsPasswordModalVisible(false);
+          }}
+        >
         <View className="flex-1 bg-black/60 items-center justify-center p-4">
           <View className="w-full max-w-md bg-white border-4 border-black p-5 sm:p-6 max-h-[90%]">
             <View className="flex-row justify-between items-center mb-4 border-b-2 border-black pb-3">
@@ -432,6 +569,7 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
+      )}
     </SafeAreaView>
   );
 }
