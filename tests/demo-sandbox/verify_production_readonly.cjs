@@ -35,10 +35,10 @@ function request(path, token = null) {
 
 function login(username, password) {
   return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({ username, password });
+    const postData = JSON.stringify({});
     const req = https.request({
       hostname: HOST,
-      path: '/api/Auth/login',
+      path: '/api/Auth/demo-login',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
