@@ -49,7 +49,9 @@
     "web": "expo start --web",
     "test:demo:sqlite": "node ../tests/demo-sandbox/test_session_isolation_sqlite.cjs",
     "test:demo:auth": "node ../tests/demo-sandbox/test_demo_auth.cjs",
-    "test:secrets": "node ../tests/demo-sandbox/scan_secrets.cjs"
+    "test:secrets": "node ../tests/demo-sandbox/scan_secrets.cjs",
+    "test:migration": "node ../tests/demo-sandbox/test_sqlite_migration_scenarios.cjs",
+    "test:sync:stock": "node ../tests/demo-sandbox/test_sync_cursor_bootstrap_stock.cjs"
   },
   "private": true
 }

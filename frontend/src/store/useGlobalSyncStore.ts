@@ -135,15 +135,24 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
         let orderSynced = 0;
         let receiptSynced = 0;
 
+        const nowIso = new Date().toISOString();
+
         // 1. SYNC GOODS RECEIPTS FIRST (Inflow before Outflow - Strict Account Isolation)
         set({ syncStatus: "Đang đồng bộ phiếu nhập kho (Inflow)..." });
         const unsyncedReceipts = await db.getAllAsync<any>(
-          "SELECT * FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?",
-          [user.id]
+          "SELECT * FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ? AND (NextRetryAt IS NULL OR NextRetryAt <= ?)",
+          [user.id, nowIso]
         );
         console.log(`[Sync] start reason=${reason} receipts=${unsyncedReceipts.length}`);
 
         for (const receipt of unsyncedReceipts) {
+          // Mid-sync account check: stop if user logged out or switched
+          const currentUser = useAuthStore.getState().user;
+          if (!currentUser || currentUser.id !== user.id) {
+            console.warn("[Sync] User changed or logged out during receipts sync. Aborting safely.");
+            return finalResult;
+          }
+
           try {
             const retryCount = receipt.SyncRetryCount || 0;
             if (retryCount >= 5) continue;
@@ -169,7 +178,7 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                const serverId = res.data || null;
                console.log(`[Sync] receipt success serverId=${serverId}`);
                await db.runAsync(
-                 "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ? WHERE OfflineReferenceId = ?",
+                 "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
                  [serverId, receipt.OfflineReferenceId]
                );
                receiptSynced++;
@@ -182,7 +191,7 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                  const serverId = e.response.data.data;
                  console.log(`[Sync] receipt success serverId=${serverId}`);
                  await db.runAsync(
-                   "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ? WHERE OfflineReferenceId = ?",
+                   "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
                    [serverId, receipt.OfflineReferenceId]
                  );
                  receiptSynced++;
@@ -199,10 +208,13 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                     newStatus = 'PermanentFailure';
                 } else if (status === 401) {
                     safeError = "Lỗi 401: Hết phiên đăng nhập.";
-                    newStatus = 'RetryableError';
+                    set({ syncStatus: "Phiên đăng nhập hết hạn." });
+                    finalResult.status = 'authenticationRequired';
+                    return finalResult;
                 } else if (status === 429) {
                     safeError = "Lỗi 429: Too Many Requests.";
                     newStatus = 'RetryableError';
+                    incrementRetry = true;
                     await sleep(3000);
                 } else if (status >= 500) {
                     safeError = `Lỗi Server ${status}`;
@@ -214,9 +226,10 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                 }
              }
              const newRetry = incrementRetry ? (receipt.SyncRetryCount || 0) + 1 : (receipt.SyncRetryCount || 0);
+             const nextRetryAt = incrementRetry ? new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString() : null;
              await db.runAsync(
-               "UPDATE LocalGoodsReceipts SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ? WHERE OfflineReferenceId = ?",
-               [safeError, newRetry, newStatus, receipt.OfflineReferenceId]
+               "UPDATE LocalGoodsReceipts SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
+               [safeError, newRetry, newStatus, nextRetryAt, receipt.OfflineReferenceId]
              );
           }
         }
@@ -224,10 +237,16 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
         // 2. SYNC STOCK ADJUSTMENTS SECOND (Inventory Correction/Inflow before Outflow - Strict Account Isolation)
         set({ syncStatus: "Đang đồng bộ điều chỉnh tồn kho..." });
         const unsyncedAdjustments = await db.getAllAsync<any>(
-          "SELECT * FROM LocalStockAdjustments WHERE IsSynced = 0 AND (UserId = ? OR UserId IS NULL OR UserId = 0)",
-          [user.id]
+          "SELECT * FROM LocalStockAdjustments WHERE IsSynced = 0 AND (UserId = ? OR UserId IS NULL OR UserId = 0) AND (NextRetryAt IS NULL OR NextRetryAt <= ?)",
+          [user.id, nowIso]
         );
         for (const adj of unsyncedAdjustments) {
+          const currentUser = useAuthStore.getState().user;
+          if (!currentUser || currentUser.id !== user.id) {
+            console.warn("[Sync] User changed or logged out during adjustments sync. Aborting safely.");
+            return finalResult;
+          }
+
           try {
             const adjPayload = {
               OfflineReferenceId: adj.OfflineReferenceId,
@@ -240,17 +259,25 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
             const res = await syncStockAdjustment(adjPayload);
             if (res.isSuccess) {
               await db.runAsync(
-                "UPDATE LocalStockAdjustments SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL WHERE OfflineReferenceId = ?",
+                "UPDATE LocalStockAdjustments SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
                 [adj.OfflineReferenceId]
               );
             }
           } catch (e: any) {
             console.error(`[Sync] Lỗi điều chỉnh tồn kho ${adj.OfflineReferenceId}:`, e.message);
             const status = e.response?.status || 500;
+            if (status === 401) {
+              set({ syncStatus: "Phiên đăng nhập hết hạn." });
+              finalResult.status = 'authenticationRequired';
+              return finalResult;
+            }
             const classified = classifySyncError(status, e.response?.data?.message || e.message);
+            const isPermanent = status === 400 || status === 403 || status === 404;
+            const newRetry = isPermanent ? (adj.RetryCount || 0) : (adj.RetryCount || 0) + 1;
+            const nextRetryAt = isPermanent ? null : new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString();
             await db.runAsync(
-              "UPDATE LocalStockAdjustments SET SyncError = ?, SyncStatus = ?, RetryCount = (RetryCount + 1) WHERE OfflineReferenceId = ?",
-              [e.message, classified.status, adj.OfflineReferenceId]
+              "UPDATE LocalStockAdjustments SET SyncError = ?, SyncStatus = ?, RetryCount = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
+              [e.message, classified.status, newRetry, nextRetryAt, adj.OfflineReferenceId]
             );
           }
         }
@@ -258,12 +285,18 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
         // 3. SYNC ORDERS THIRD (Outflow after Inflow and Adjustments - Strict Account Isolation)
         set({ syncStatus: "Đang đồng bộ hóa đơn (Outflow)..." });
         const unsyncedOrders = await db.getAllAsync<any>(
-          "SELECT * FROM LocalOrders WHERE IsSynced = 0 AND (OwnerUserId = ? OR OwnerUserId IS NULL OR OwnerUserId = 0)",
-          [user.id]
+          "SELECT * FROM LocalOrders WHERE IsSynced = 0 AND (OwnerUserId = ? OR OwnerUserId IS NULL OR OwnerUserId = 0) AND (NextRetryAt IS NULL OR NextRetryAt <= ?)",
+          [user.id, nowIso]
         );
         console.log(`[Sync] start reason=${reason} orders=${unsyncedOrders.length}`);
 
         for (const order of unsyncedOrders) {
+          const currentUser = useAuthStore.getState().user;
+          if (!currentUser || currentUser.id !== user.id) {
+            console.warn("[Sync] User changed or logged out during orders sync. Aborting safely.");
+            return finalResult;
+          }
+
           try {
             const retryCount = order.SyncRetryCount || 0;
             if (retryCount >= 5) continue;
@@ -303,7 +336,7 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                const serverId = res.data || null;
                console.log(`[Sync] order success serverId=${serverId}`);
                await db.runAsync(
-                 "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ? WHERE OfflineReferenceId = ?",
+                 "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
                  [serverId, order.OfflineReferenceId]
                );
                orderSynced++;
@@ -317,7 +350,7 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                  const serverId = e.response.data.data;
                  console.log(`[Sync] order success serverId=${serverId}`);
                  await db.runAsync(
-                   "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ? WHERE OfflineReferenceId = ?",
+                   "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
                    [serverId, order.OfflineReferenceId]
                  );
                  orderSynced++;
@@ -345,10 +378,13 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
                     newStatus = 'PermanentFailure';
                 } else if (status === 401) {
                     safeError = "Lỗi 401: Hết phiên đăng nhập.";
-                    newStatus = 'RetryableError';
+                    set({ syncStatus: "Phiên đăng nhập hết hạn." });
+                    finalResult.status = 'authenticationRequired';
+                    return finalResult;
                 } else if (status === 429) {
                     safeError = "Lỗi 429: Too Many Requests.";
                     newStatus = 'RetryableError';
+                    incrementRetry = true;
                     await sleep(3000);
                 } else if (status >= 500) {
                     safeError = `Lỗi Server ${status}`;
@@ -361,9 +397,10 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
              }
 
              const newRetry = incrementRetry ? (order.SyncRetryCount || 0) + 1 : (order.SyncRetryCount || 0);
+             const nextRetryAt = incrementRetry ? new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString() : null;
              await db.runAsync(
-               "UPDATE LocalOrders SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ? WHERE OfflineReferenceId = ?",
-               [safeError, newRetry, newStatus, order.OfflineReferenceId]
+               "UPDATE LocalOrders SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
+               [safeError, newRetry, newStatus, nextRetryAt, order.OfflineReferenceId]
              );
           }
         }

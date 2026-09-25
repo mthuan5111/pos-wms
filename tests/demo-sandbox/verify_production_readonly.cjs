@@ -117,6 +117,25 @@ async function verify() {
   const goodsReceipts = grRes.data?.data || [];
   console.log(`[VERIFY] GoodsReceipts Count: ${goodsReceipts.length} (Baseline: 5)`);
 
+  // 8. Query Sync Cursor
+  const cursorRes = await request('/api/Sync/cursor', token);
+  const currentCursor = cursorRes.data?.currentCursor ?? cursorRes.data?.CurrentCursor ?? -1;
+  console.log(`[VERIFY] Sync Cursor: ${currentCursor} (Baseline: 0)`);
+
+  // 9. Query Sync Changes
+  const changesRes = await request('/api/Sync/changes?after=0', token);
+  const changes = changesRes.data?.changes || changesRes.data?.Changes || [];
+  const requiresBootstrap = changesRes.data?.requiresBootstrap ?? changesRes.data?.RequiresBootstrap ?? null;
+  console.log(`[VERIFY] Sync Changes Count: ${changes.length} (Baseline: 0), RequiresBootstrap: ${requiresBootstrap}`);
+
+  // 10. Query Sync Bootstrap Snapshot
+  const snapRes = await request('/api/Sync/bootstrap-snapshot', token);
+  const snap = snapRes.data || {};
+  const snapProds = snap.products || [];
+  const snapCats = snap.categories || [];
+  const snapInvs = snap.inventories || [];
+  console.log(`[VERIFY] Snapshot Products: ${snapProds.length} (Baseline: 38), Snapshot Categories: ${snapCats.length} (Baseline: 8)`);
+
   // Baseline comparisons
   let allMatched = true;
   if (products.length !== 38) { console.error('[MISMATCH] Products'); allMatched = false; }
@@ -127,6 +146,10 @@ async function verify() {
   if (orders.length !== 29) { console.error('[MISMATCH] Orders'); allMatched = false; }
   if (totalRevenue !== 2656000) { console.error('[MISMATCH] Total Revenue'); allMatched = false; }
   if (goodsReceipts.length !== 5) { console.error('[MISMATCH] GoodsReceipts'); allMatched = false; }
+  if (currentCursor !== 0) { console.error('[MISMATCH] Sync Cursor is not 0'); allMatched = false; }
+  if (changes.length !== 0) { console.error('[MISMATCH] Sync Changes is not 0'); allMatched = false; }
+  if (snapProds.length !== 38) { console.error('[MISMATCH] Snapshot Products count'); allMatched = false; }
+  if (snapCats.length !== 8) { console.error('[MISMATCH] Snapshot Categories count'); allMatched = false; }
 
   if (allMatched) {
     console.log('\n======================================================');

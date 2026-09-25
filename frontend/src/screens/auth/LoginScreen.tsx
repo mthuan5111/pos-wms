@@ -11,6 +11,8 @@ import { useBootstrapStore } from '@/store/useBootstrapStore';
 import apiClient from '@/services/apiClient';
 import { clearTokens } from '@/utils/token';
 
+import { BUILD_INFO } from '@/config/buildInfo';
+
 const loginSchema = z.object({
     username: z.string().min(1, 'Tên đăng nhập không được để trống'),
     password: z.string().min(6, 'Mật khẩu phải có ít nhất 6 ký tự'),
@@ -233,8 +235,15 @@ export default function LoginScreen() {
                         </TouchableOpacity>
                     </View>
 
+                    {/* Build / Version Metadata */}
+                    <View className="items-center mt-6">
+                        <Text className="text-[10px] text-neutral-400 font-mono">
+                            v{BUILD_INFO.version} • git:{BUILD_INFO.gitCommit} • schema:v{BUILD_INFO.schemaVersion}
+                        </Text>
+                    </View>
+
                     {/* Bottom decorative element */}
-                    <View className="items-center mt-8">
+                    <View className="items-center mt-4">
                         <View style={{ width: 24, height: 2, backgroundColor: '#E5E5E5' }} />
                     </View>
                 </View>

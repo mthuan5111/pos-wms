@@ -88,6 +88,7 @@ expo-env.d.ts
 
 # Logs and test outputs
 *.log
+*.audit_backup
 TestResults/
 coverage/
 *.coverage

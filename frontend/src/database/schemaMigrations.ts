@@ -3,6 +3,7 @@ export interface SQLiteDatabaseAdapter {
   runAsync(sql: string, ...params: any[]): Promise<any>;
   getAllAsync<T = any>(sql: string, ...params: any[]): Promise<T[]>;
   getFirstAsync<T = any>(sql: string, ...params: any[]): Promise<T | null>;
+  withTransactionAsync?(task: () => Promise<void>): Promise<void>;
 }
 
 export const TARGET_SCHEMA_VERSION = 8;
@@ -30,31 +31,14 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
     await db.execAsync("PRAGMA journal_mode = WAL;");
     await db.execAsync("PRAGMA foreign_keys = ON;");
 
-    // Data generation check (prevents stale local sync queues from polluting refreshed backend)
+    // Data generation record (purely non-destructive metadata tracking to prevent accidental data purge)
     await db.execAsync("CREATE TABLE IF NOT EXISTS _data_generation (generation TEXT);");
     const genRow = await db.getFirstAsync<{ generation: string }>("SELECT generation FROM _data_generation LIMIT 1");
-    if (genRow?.generation !== TARGET_DATA_GENERATION) {
-      console.log(`[DB] Data generation thay đổi (${genRow?.generation || 'none'} -> ${TARGET_DATA_GENERATION}). Làm sạch dữ liệu local cũ...`);
-      try {
-        await db.execAsync(`
-          PRAGMA foreign_keys = OFF;
-          DELETE FROM LocalOrderDetails;
-          DELETE FROM LocalOrders;
-          DELETE FROM LocalGoodsReceiptDetails;
-          DELETE FROM LocalGoodsReceipts;
-          DELETE FROM LocalStockAdjustments;
-          DELETE FROM LocalProducts;
-          DELETE FROM LocalCategories;
-          DELETE FROM LocalSuppliers;
-          DELETE FROM LocalCustomers;
-          DELETE FROM _data_generation;
-          INSERT INTO _data_generation (generation) VALUES ('${TARGET_DATA_GENERATION}');
-          PRAGMA foreign_keys = ON;
-        `);
-        console.log(`[DB] Đã làm sạch local database an toàn cho generation ${TARGET_DATA_GENERATION}`);
-      } catch (purgeErr) {
-        console.warn("[DB] Cảnh báo khi dọn dẹp local tables:", purgeErr);
-      }
+    if (!genRow) {
+      await db.runAsync("INSERT INTO _data_generation (generation) VALUES (?)", TARGET_DATA_GENERATION);
+    } else if (genRow.generation !== TARGET_DATA_GENERATION) {
+      console.log(`[DB] Cập nhật data generation (${genRow.generation} -> ${TARGET_DATA_GENERATION}) an toàn, giữ nguyên toàn bộ outbox local.`);
+      await db.runAsync("UPDATE _data_generation SET generation = ?", TARGET_DATA_GENERATION);
     }
 
     // Version management
@@ -258,6 +242,14 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
         IsBootstrapped INTEGER DEFAULT 0
       );
     `);
+
+    // Ensure default checkpoint exists if table is empty (un-bootstrapped state: IsBootstrapped = 0)
+    const cpRow = await db.getFirstAsync<{ ScopeKey: string }>("SELECT ScopeKey FROM SyncCheckpoints WHERE ScopeKey = 'global'");
+    if (!cpRow) {
+      await db.runAsync(
+        "INSERT INTO SyncCheckpoints (ScopeKey, LastCursor, LastPulledAt, IsBootstrapped) VALUES ('global', 0, NULL, 0)"
+      );
+    }
 
     // Ensure all schema columns exist across older installs (idempotent safeAddColumn)
     await safeAddColumn(db, "LocalCategories", "Description", "TEXT");

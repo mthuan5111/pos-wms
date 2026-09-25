@@ -81,7 +81,7 @@ if (__DEV__ && typeof window !== "undefined") {
   (window as any).__GET_LOCAL_DB__ = getDBConnection;
 }
 
-import { executeDatabaseMigrations } from "./schemaMigrations";
+import { executeDatabaseMigrations, SQLiteDatabaseAdapter } from "./schemaMigrations";
 
 export const initLocalDatabase = async () => {
   try {
@@ -344,6 +344,210 @@ export const pullMasterData = async (role: string = "Admin"): Promise<{ failedMo
   }
 };
 
+export const applyBootstrapSnapshotAsync = async (
+  db: SQLiteDatabaseAdapter,
+  snap: any
+): Promise<void> => {
+  await db.execAsync("PRAGMA foreign_keys = OFF;");
+  try {
+    const runInTx = async () => {
+      // 1. Categories
+      if (snap.categories?.length > 0) {
+        for (const c of snap.categories) {
+          const isTombstone = c.isActive === false || c.IsActive === false;
+          if (isTombstone) {
+            await db.runAsync("UPDATE LocalCategories SET IsActive = 0, IsDeleted = 1 WHERE Id = ?", [c.id || c.Id]);
+          } else {
+            await db.runAsync(
+              "INSERT OR REPLACE INTO LocalCategories (Id, Name, Description, Code, IsSystem, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, 1, 0)",
+              [c.id || c.Id, c.name || c.Name, c.description || c.Description || "", c.code || c.Code || null, c.isSystem || c.IsSystem ? 1 : 0]
+            );
+          }
+        }
+      }
+
+      // 2. Suppliers
+      if (snap.suppliers?.length > 0) {
+        for (const s of snap.suppliers) {
+          const isTombstone = s.isActive === false || s.IsActive === false;
+          if (isTombstone) {
+            await db.runAsync("UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1 WHERE Id = ?", [s.id || s.Id]);
+          } else {
+            await db.runAsync(
+              "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, 1, 0)",
+              [s.id || s.Id, s.name || s.Name, s.contactPerson || s.ContactPerson || "", s.phone || s.Phone || "", s.address || s.Address || ""]
+            );
+          }
+        }
+      }
+
+      // 3. Pending movements map for stock calculation (preserve un-synced outbox)
+      const pendingOrders = await db.getAllAsync<{ OfflineReferenceId: string }>(
+        "SELECT OfflineReferenceId FROM LocalOrders WHERE IsSynced = 0"
+      );
+      const pendingOutboundMap = new Map<string, number>();
+      for (const order of pendingOrders) {
+        const details = await db.getAllAsync<{ ProductId: string; Quantity: number }>(
+          "SELECT ProductId, Quantity FROM LocalOrderDetails WHERE OfflineReferenceId = ?",
+          [order.OfflineReferenceId]
+        );
+        for (const d of details) {
+          pendingOutboundMap.set(d.ProductId, (pendingOutboundMap.get(d.ProductId) || 0) + d.Quantity);
+        }
+      }
+
+      const pendingReceipts = await db.getAllAsync<{ OfflineReferenceId: string }>(
+        "SELECT OfflineReferenceId FROM LocalGoodsReceipts WHERE IsSynced = 0"
+      );
+      const pendingInboundMap = new Map<string, number>();
+      for (const rc of pendingReceipts) {
+        const details = await db.getAllAsync<{ ProductId: string; Quantity: number }>(
+          "SELECT ProductId, Quantity FROM LocalGoodsReceiptDetails WHERE OfflineReferenceId = ?",
+          [rc.OfflineReferenceId]
+        );
+        for (const d of details) {
+          pendingInboundMap.set(d.ProductId, (pendingInboundMap.get(d.ProductId) || 0) + d.Quantity);
+        }
+      }
+
+      const pendingAdjustments = await db.getAllAsync<{ ProductId: string; Delta: number }>(
+        "SELECT ProductId, Delta FROM LocalStockAdjustments WHERE IsSynced = 0"
+      );
+      const pendingAdjustmentMap = new Map<string, number>();
+      for (const adj of pendingAdjustments) {
+        pendingAdjustmentMap.set(adj.ProductId, (pendingAdjustmentMap.get(adj.ProductId) || 0) + adj.Delta);
+      }
+
+      // 4. Products & Inventories
+      const invMap = new Map<string, number>();
+      for (const inv of (snap.inventories || [])) {
+        invMap.set(String(inv.productId || inv.ProductId), inv.stockQuantity ?? inv.StockQuantity ?? 0);
+      }
+
+      if (snap.products?.length > 0) {
+        for (const p of snap.products) {
+          const pIdStr = String(p.id || p.Id);
+          const isTombstone = p.isActive === false || p.IsActive === false;
+          if (isTombstone) {
+            await db.runAsync(
+              "UPDATE LocalProducts SET IsActive = 0, IsSalePriceConfigured = 0, IsDeleted = 1 WHERE Id = ?",
+              [pIdStr]
+            );
+          } else {
+            const serverStock = invMap.get(pIdStr) ?? 0;
+            const effectiveStock = calculateEffectiveStock(
+              serverStock,
+              pendingInboundMap.get(pIdStr) || 0,
+              pendingOutboundMap.get(pIdStr) || 0,
+              pendingAdjustmentMap.get(pIdStr) || 0
+            );
+            const threshold = p.lowStockThreshold ?? p.LowStockThreshold ?? 10;
+            const isConfigured = (p.isSalePriceConfigured !== false && p.IsSalePriceConfigured !== false) ? 1 : 0;
+            await db.runAsync(
+              "INSERT OR REPLACE INTO LocalProducts (Id, CategoryId, SupplierId, Name, Price, Barcode, StockQuantity, ImageUrl, ImagePublicId, LowStockThreshold, IsSalePriceConfigured, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)",
+              [
+                pIdStr,
+                p.categoryId || p.CategoryId || 1,
+                p.supplierId || p.SupplierId || null,
+                p.name || p.Name,
+                p.price || p.Price || 0,
+                p.barcode || p.Barcode || "",
+                effectiveStock,
+                p.imageUrl || p.ImageUrl || null,
+                p.imagePublicId || p.ImagePublicId || null,
+                threshold,
+                isConfigured
+              ]
+            );
+          }
+        }
+      }
+
+      // 5. Recent Orders (Safe upsert, mark Synced, DO NOT recreate outbox)
+      if (snap.recentOrders?.length > 0) {
+        for (const o of snap.recentOrders) {
+          const serverId = o.id || o.Id;
+          const offlineRef = o.offlineReferenceId || o.OfflineReferenceId || `SERVER_${serverId}`;
+          const exists = await db.getFirstAsync<{ OfflineReferenceId: string }>(
+            "SELECT OfflineReferenceId FROM LocalOrders WHERE OfflineReferenceId = ? OR ServerId = ?",
+            [offlineRef, serverId]
+          );
+          if (!exists) {
+            await db.runAsync(
+              "INSERT OR REPLACE INTO LocalOrders (OfflineReferenceId, CustomerId, TotalAmount, CreatedAt, IsSynced, SyncStatus, ServerId, PaymentMethod, OwnerUserId, ShiftId) VALUES (?, ?, ?, ?, 1, 'Synced', ?, ?, ?, ?)",
+              [
+                offlineRef,
+                o.customerId || o.CustomerId || 1,
+                o.totalAmount || o.TotalAmount || 0,
+                o.orderDate || o.OrderDate || new Date().toISOString(),
+                serverId,
+                o.paymentMethod || o.PaymentMethod || "CASH",
+                o.userId || o.UserId || 0,
+                o.shiftId || o.ShiftId || null
+              ]
+            );
+            for (const d of (o.details || o.Details || [])) {
+              await db.runAsync(
+                "INSERT INTO LocalOrderDetails (OfflineReferenceId, ProductId, Quantity, Price) VALUES (?, ?, ?, ?)",
+                [offlineRef, String(d.productId || d.ProductId), d.quantity || d.Quantity, d.unitPrice || d.UnitPrice || 0]
+              );
+            }
+          }
+        }
+      }
+
+      // 6. Recent GoodsReceipts (Safe upsert, mark Synced, DO NOT recreate outbox)
+      if (snap.recentGoodsReceipts?.length > 0) {
+        for (const gr of snap.recentGoodsReceipts) {
+          const serverId = gr.id || gr.Id;
+          const offlineRef = gr.offlineReferenceId || gr.OfflineReferenceId || `SERVER_GR_${serverId}`;
+          const exists = await db.getFirstAsync<{ OfflineReferenceId: string }>(
+            "SELECT OfflineReferenceId FROM LocalGoodsReceipts WHERE OfflineReferenceId = ? OR ServerId = ?",
+            [offlineRef, serverId]
+          );
+          if (!exists) {
+            await db.runAsync(
+              "INSERT OR REPLACE INTO LocalGoodsReceipts (OfflineReferenceId, SupplierId, SupplierName, UserId, TotalAmount, Remarks, CreatedAt, IsSynced, SyncStatus, ServerId, ShiftId) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'Synced', ?, ?)",
+              [
+                offlineRef,
+                gr.supplierId || gr.SupplierId || 1,
+                gr.supplierName || gr.SupplierName || "",
+                gr.userId || gr.UserId || 0,
+                gr.totalAmount || gr.TotalAmount || 0,
+                gr.remarks || gr.Remarks || "",
+                gr.receiptDate || gr.ReceiptDate || new Date().toISOString(),
+                serverId,
+                gr.shiftId || gr.ShiftId || null
+              ]
+            );
+            for (const d of (gr.details || gr.Details || [])) {
+              await db.runAsync(
+                "INSERT INTO LocalGoodsReceiptDetails (OfflineReferenceId, ProductId, Quantity, CostPrice) VALUES (?, ?, ?, ?)",
+                [offlineRef, String(d.productId || d.ProductId), d.quantity || d.Quantity, d.costPrice || d.CostPrice || 0]
+              );
+            }
+          }
+        }
+      }
+
+      // 7. Update checkpoint: IsBootstrapped = 1, LastCursor = snapshot.currentCursor
+      const cursor = snap.currentCursor ?? snap.CurrentCursor ?? 0;
+      await db.runAsync(
+        "INSERT OR REPLACE INTO SyncCheckpoints (ScopeKey, LastCursor, LastPulledAt, IsBootstrapped) VALUES ('global', ?, ?, 1)",
+        [cursor, new Date().toISOString()]
+      );
+    };
+
+    if (db.withTransactionAsync) {
+      await db.withTransactionAsync(runInTx);
+    } else {
+      await runInTx();
+    }
+  } finally {
+    await db.execAsync("PRAGMA foreign_keys = ON;");
+  }
+};
+
 export const pullIncrementalChangesAsync = async (
   role: string = "Admin"
 ): Promise<{ appliedCount: number; nextCursor: number; hasMore: boolean }> => {
@@ -359,6 +563,17 @@ export const pullIncrementalChangesAsync = async (
     const changes: any[] = data?.changes || data?.Changes || [];
     const nextCursor: number = data?.nextCursor ?? data?.NextCursor ?? lastCursor;
     const hasMore: boolean = !!(data?.hasMore ?? data?.HasMore);
+    const requiresBootstrap: boolean = !!(data?.requiresBootstrap ?? data?.RequiresBootstrap);
+
+    if (requiresBootstrap) {
+      console.log("[Sync] Server signaled requiresBootstrap=true (retention gap or stale cursor). Re-bootstrapping master data safely via upsert...");
+      const snapRes = await apiClient.get("/Sync/bootstrap-snapshot");
+      const snap = snapRes.data;
+      if (snap) {
+        await applyBootstrapSnapshotAsync(db, snap);
+      }
+      return { appliedCount: 0, nextCursor: snap?.currentCursor ?? nextCursor, hasMore: false };
+    }
 
     if (changes.length === 0) {
       if (nextCursor > lastCursor) {
