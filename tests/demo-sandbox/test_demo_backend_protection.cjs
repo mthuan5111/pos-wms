@@ -44,7 +44,7 @@ async function testDemoProtection() {
     { method: 'put', url: '/Suppliers/1', data: { name: 'Demo Hack Supplier Edit' } },
     { method: 'delete', url: '/Suppliers/1' },
     { method: 'post', url: '/Inventories/adjust', data: { ProductId: 1, Delta: 10 } },
-    { method: 'post', url: '/Users', data: { username: 'demo_hacker', password: 'MOCK_TEST_PAYLOAD' } },
+    { method: 'post', url: '/Users', data: { username: 'demo_hacker', password: 'Dummy_MOCK_TEST_PAYLOAD' } },
     { method: 'put', url: '/Users/1', data: { fullName: 'Demo Hacker Edit' } },
     { method: 'delete', url: '/Users/1' },
     { method: 'post', url: '/Products/upload-image', data: {}, headers: { 'Content-Type': 'multipart/form-data' } },

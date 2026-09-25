@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import NetInfo from "@react-native-community/netinfo";
-import { getDBConnection, getLocalOrderDetails } from '@/database/db';
+import { getDBConnection, getLocalOrderDetails, pullIncrementalChangesAsync } from '@/database/db';
 import { syncOfflineOrder } from '@/services/orderApi';
 import { syncOfflineGoodsReceipt } from '@/services/goodsReceiptApi';
 import { syncStockAdjustment } from '@/services/productApi';
@@ -63,8 +63,8 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
     try {
       const db = await getDBConnection();
       const countRow = await db.getFirstAsync<{c: number}>(
-        "SELECT (SELECT COUNT(*) FROM LocalOrders WHERE IsSynced = 0 AND OwnerUserId = ?) + (SELECT COUNT(*) FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?) as c",
-        [user.id, user.id]
+        "SELECT (SELECT COUNT(*) FROM LocalOrders WHERE IsSynced = 0 AND OwnerUserId = ?) + (SELECT COUNT(*) FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?) + (SELECT COUNT(*) FROM LocalStockAdjustments WHERE IsSynced = 0 AND UserId = ?) as c",
+        [user.id, user.id, user.id]
       );
       set({ pendingCount: countRow?.c || 0 });
     } catch (error) {
@@ -134,13 +134,13 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
         const db = await getDBConnection();
         let orderSynced = 0;
         let receiptSynced = 0;
-        const isAdmin = user.role === 'Admin' || user.role === 'Manager';
 
-        // 1. SYNC GOODS RECEIPTS FIRST (Inflow before Outflow - BUG-SYNC-001)
+        // 1. SYNC GOODS RECEIPTS FIRST (Inflow before Outflow - Strict Account Isolation)
         set({ syncStatus: "Đang đồng bộ phiếu nhập kho (Inflow)..." });
-        const unsyncedReceipts = isAdmin
-          ? await db.getAllAsync<any>("SELECT * FROM LocalGoodsReceipts WHERE IsSynced = 0")
-          : await db.getAllAsync<any>("SELECT * FROM LocalGoodsReceipts WHERE IsSynced = 0 AND (UserId = ? OR UserId IS NULL OR UserId = 0)", [user.id]);
+        const unsyncedReceipts = await db.getAllAsync<any>(
+          "SELECT * FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?",
+          [user.id]
+        );
         console.log(`[Sync] start reason=${reason} receipts=${unsyncedReceipts.length}`);
 
         for (const receipt of unsyncedReceipts) {
@@ -221,10 +221,11 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
           }
         }
 
-        // 2. SYNC STOCK ADJUSTMENTS SECOND (Inventory Correction/Inflow before Outflow - BUG-INV-004, Section 10)
+        // 2. SYNC STOCK ADJUSTMENTS SECOND (Inventory Correction/Inflow before Outflow - Strict Account Isolation)
         set({ syncStatus: "Đang đồng bộ điều chỉnh tồn kho..." });
         const unsyncedAdjustments = await db.getAllAsync<any>(
-          "SELECT * FROM LocalStockAdjustments WHERE IsSynced = 0"
+          "SELECT * FROM LocalStockAdjustments WHERE IsSynced = 0 AND (UserId = ? OR UserId IS NULL OR UserId = 0)",
+          [user.id]
         );
         for (const adj of unsyncedAdjustments) {
           try {
@@ -233,7 +234,7 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
               ProductId: Number(adj.ProductId),
               Delta: adj.Delta,
               Reason: adj.Reason || "Điều chỉnh tồn kho kiểm kê",
-              UserId: adj.UserId || user?.id || 0,
+              UserId: user.id,
               CreatedAt: adj.CreatedAt
             };
             const res = await syncStockAdjustment(adjPayload);
@@ -254,11 +255,12 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
           }
         }
 
-        // 3. SYNC ORDERS THIRD (Outflow after Inflow and Adjustments - BUG-SYNC-001)
+        // 3. SYNC ORDERS THIRD (Outflow after Inflow and Adjustments - Strict Account Isolation)
         set({ syncStatus: "Đang đồng bộ hóa đơn (Outflow)..." });
-        const unsyncedOrders = isAdmin
-          ? await db.getAllAsync<any>("SELECT * FROM LocalOrders WHERE IsSynced = 0")
-          : await db.getAllAsync<any>("SELECT * FROM LocalOrders WHERE IsSynced = 0 AND (OwnerUserId = ? OR OwnerUserId IS NULL OR OwnerUserId = 0)", [user.id]);
+        const unsyncedOrders = await db.getAllAsync<any>(
+          "SELECT * FROM LocalOrders WHERE IsSynced = 0 AND (OwnerUserId = ? OR OwnerUserId IS NULL OR OwnerUserId = 0)",
+          [user.id]
+        );
         console.log(`[Sync] start reason=${reason} orders=${unsyncedOrders.length}`);
 
         for (const order of unsyncedOrders) {
@@ -380,6 +382,14 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
            if (orderSynced > 0) {
               invStore.invalidateOrder();
            }
+        }
+
+        // 4. PULL INCREMENTAL SERVER CHANGES (Fetch updates from other devices / server stock changes)
+        try {
+          set({ syncStatus: "Đang nhận cập nhật từ máy chủ..." });
+          await pullIncrementalChangesAsync(user.role);
+        } catch (pullErr) {
+          console.warn("[Sync] Incremental pull warning:", pullErr);
         }
 
         await get().refreshPendingCount();

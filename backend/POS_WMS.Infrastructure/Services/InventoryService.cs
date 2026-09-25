@@ -154,6 +154,20 @@ namespace POS_WMS.Infrastructure.Services
                 await transaction.CommitAsync();
                 return true;
             }
+            catch (DbUpdateConcurrencyException)
+            {
+                await transaction.RollbackAsync();
+
+                // Check if another concurrent thread with the SAME OfflineReferenceId already committed
+                var processed = await _context.StockMovements
+                    .AnyAsync(sm => sm.ReferenceType == "ADJUSTMENT" &&
+                        (sm.OfflineReferenceId == request.OfflineReferenceId || sm.CreatedBy.Contains(request.OfflineReferenceId)));
+                if (processed)
+                {
+                    return true;
+                }
+                throw;
+            }
             catch (DbUpdateException ex)
             {
                 await transaction.RollbackAsync();
@@ -165,6 +179,15 @@ namespace POS_WMS.Infrastructure.Services
                     // Concurrent race condition safely prevented by database unique constraint
                     return true;
                 }
+
+                var processed = await _context.StockMovements
+                    .AnyAsync(sm => sm.ReferenceType == "ADJUSTMENT" &&
+                        (sm.OfflineReferenceId == request.OfflineReferenceId || sm.CreatedBy.Contains(request.OfflineReferenceId)));
+                if (processed)
+                {
+                    return true;
+                }
+
                 throw;
             }
             catch

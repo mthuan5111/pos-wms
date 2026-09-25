@@ -258,11 +258,327 @@ export const pullMasterData = async (role: string = "Admin"): Promise<{ failedMo
     await db.execAsync("PRAGMA foreign_keys = ON;");
   }
 
+    try {
+      const cursorRes = await apiClient.get("/Sync/cursor");
+      const currentCursor = cursorRes.data?.currentCursor ?? cursorRes.data?.CurrentCursor ?? 0;
+      await db.runAsync(
+        "INSERT OR REPLACE INTO SyncCheckpoints (ScopeKey, LastCursor, LastPulledAt, IsBootstrapped) VALUES ('global', ?, ?, 1)",
+        [currentCursor, new Date().toISOString()]
+      );
+    } catch (cursorErr) {
+      console.warn("[DB] Không thể cập nhật SyncCheckpoints cursor ban đầu:", cursorErr);
+    }
+
+    if (!isDemo) {
+      try {
+        const snapRes = await apiClient.get("/Sync/bootstrap-snapshot");
+        const snap = snapRes.data;
+        if (snap?.recentOrders?.length > 0 || snap?.recentGoodsReceipts?.length > 0) {
+          await db.execAsync("PRAGMA foreign_keys = OFF;");
+          try {
+            await db.withTransactionAsync(async () => {
+              if (snap.recentOrders) {
+                for (const o of snap.recentOrders) {
+                  const offlineRef = o.offlineReferenceId || `SERVER_${o.id}`;
+                  const exists = await db.getFirstAsync<{ OfflineReferenceId: string }>(
+                    "SELECT OfflineReferenceId FROM LocalOrders WHERE OfflineReferenceId = ? OR ServerId = ?",
+                    [offlineRef, o.id]
+                  );
+                  if (!exists) {
+                    await db.runAsync(
+                      "INSERT OR REPLACE INTO LocalOrders (OfflineReferenceId, CustomerId, TotalAmount, CreatedAt, IsSynced, SyncStatus, ServerId, PaymentMethod, OwnerUserId, ShiftId) VALUES (?, ?, ?, ?, 1, 'Synced', ?, ?, ?, ?)",
+                      [offlineRef, o.customerId || 1, o.totalAmount, o.orderDate || new Date().toISOString(), o.id, o.paymentMethod || "CASH", o.userId || 0, o.shiftId || null]
+                    );
+                    for (const d of (o.details || [])) {
+                      await db.runAsync(
+                        "INSERT INTO LocalOrderDetails (OfflineReferenceId, ProductId, Quantity, Price) VALUES (?, ?, ?, ?)",
+                        [offlineRef, String(d.productId), d.quantity, d.unitPrice || 0]
+                      );
+                    }
+                  }
+                }
+              }
+
+              if (snap.recentGoodsReceipts) {
+                for (const gr of snap.recentGoodsReceipts) {
+                  const offlineRef = gr.offlineReferenceId || `SERVER_GR_${gr.id}`;
+                  const exists = await db.getFirstAsync<{ OfflineReferenceId: string }>(
+                    "SELECT OfflineReferenceId FROM LocalGoodsReceipts WHERE OfflineReferenceId = ? OR ServerId = ?",
+                    [offlineRef, gr.id]
+                  );
+                  if (!exists) {
+                    await db.runAsync(
+                      "INSERT OR REPLACE INTO LocalGoodsReceipts (OfflineReferenceId, SupplierId, SupplierName, UserId, TotalAmount, Remarks, CreatedAt, IsSynced, SyncStatus, ServerId, ShiftId) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'Synced', ?, ?)",
+                      [offlineRef, gr.supplierId || 1, gr.supplierName || "", gr.userId || 0, gr.totalAmount, gr.remarks || "", gr.receiptDate || new Date().toISOString(), gr.id, gr.shiftId || null]
+                    );
+                    for (const d of (gr.details || [])) {
+                      await db.runAsync(
+                        "INSERT INTO LocalGoodsReceiptDetails (OfflineReferenceId, ProductId, Quantity, CostPrice) VALUES (?, ?, ?, ?)",
+                        [offlineRef, String(d.productId), d.quantity, d.costPrice || 0]
+                      );
+                    }
+                  }
+                }
+              }
+
+              const cursor = snap.currentCursor ?? 0;
+              await db.runAsync(
+                "INSERT OR REPLACE INTO SyncCheckpoints (ScopeKey, LastCursor, LastPulledAt, IsBootstrapped) VALUES ('global', ?, ?, 1)",
+                [cursor, new Date().toISOString()]
+              );
+            });
+          } finally {
+            await db.execAsync("PRAGMA foreign_keys = ON;");
+          }
+        }
+      } catch (snapErr) {
+        console.warn("[DB] Không thể tải bootstrap-snapshot:", snapErr);
+      }
+    }
+
     console.log("[DB] Pull Master Data thành công!");
     return { failedModules, hasRequiredError };
   } catch (error) {
     console.error("Lỗi khi pullMasterData:", error);
     return { failedModules: ["Lỗi hệ thống"], hasRequiredError: true };
+  }
+};
+
+export const pullIncrementalChangesAsync = async (
+  role: string = "Admin"
+): Promise<{ appliedCount: number; nextCursor: number; hasMore: boolean }> => {
+  try {
+    const db = await getDBConnection();
+    const checkpoint = await db.getFirstAsync<{ LastCursor: number }>(
+      "SELECT LastCursor FROM SyncCheckpoints WHERE ScopeKey = 'global'"
+    );
+    const lastCursor = checkpoint?.LastCursor ?? 0;
+
+    const res = await apiClient.get(`/Sync/changes?after=${lastCursor}&limit=50`);
+    const data = res.data;
+    const changes: any[] = data?.changes || data?.Changes || [];
+    const nextCursor: number = data?.nextCursor ?? data?.NextCursor ?? lastCursor;
+    const hasMore: boolean = !!(data?.hasMore ?? data?.HasMore);
+
+    if (changes.length === 0) {
+      if (nextCursor > lastCursor) {
+        await db.runAsync(
+          "UPDATE SyncCheckpoints SET LastCursor = ?, LastPulledAt = ? WHERE ScopeKey = 'global'",
+          [nextCursor, new Date().toISOString()]
+        );
+      }
+      return { appliedCount: 0, nextCursor, hasMore: false };
+    }
+
+    await db.execAsync("PRAGMA foreign_keys = OFF;");
+    try {
+      await db.withTransactionAsync(async () => {
+        // Calculate pending movements so incremental changes preserve effective stock
+        const pendingOrders = await db.getAllAsync<{ OfflineReferenceId: string }>(
+          "SELECT OfflineReferenceId FROM LocalOrders WHERE IsSynced = 0"
+        );
+        const pendingOutboundMap = new Map<string, number>();
+        for (const order of pendingOrders) {
+          const details = await db.getAllAsync<{ ProductId: string; Quantity: number }>(
+            "SELECT ProductId, Quantity FROM LocalOrderDetails WHERE OfflineReferenceId = ?",
+            [order.OfflineReferenceId]
+          );
+          for (const d of details) {
+            pendingOutboundMap.set(d.ProductId, (pendingOutboundMap.get(d.ProductId) || 0) + d.Quantity);
+          }
+        }
+
+        const pendingReceipts = await db.getAllAsync<{ OfflineReferenceId: string }>(
+          "SELECT OfflineReferenceId FROM LocalGoodsReceipts WHERE IsSynced = 0"
+        );
+        const pendingInboundMap = new Map<string, number>();
+        for (const rc of pendingReceipts) {
+          const details = await db.getAllAsync<{ ProductId: string; Quantity: number }>(
+            "SELECT ProductId, Quantity FROM LocalGoodsReceiptDetails WHERE OfflineReferenceId = ?",
+            [rc.OfflineReferenceId]
+          );
+          for (const d of details) {
+            pendingInboundMap.set(d.ProductId, (pendingInboundMap.get(d.ProductId) || 0) + d.Quantity);
+          }
+        }
+
+        const pendingAdjustments = await db.getAllAsync<{ ProductId: string; Delta: number }>(
+          "SELECT ProductId, Delta FROM LocalStockAdjustments WHERE IsSynced = 0"
+        );
+        const pendingAdjustmentMap = new Map<string, number>();
+        for (const adj of pendingAdjustments) {
+          pendingAdjustmentMap.set(adj.ProductId, (pendingAdjustmentMap.get(adj.ProductId) || 0) + adj.Delta);
+        }
+
+        for (const change of changes) {
+          const entityType = change.entityType || change.EntityType;
+          const operation = change.operation || change.Operation;
+          const entityData = change.data || change.Data;
+          if (!entityData) continue;
+
+          if (entityType === "Product") {
+            const pIdStr = String(entityData.id || entityData.Id);
+            const isTombstone = operation === "Delete" || entityData.isActive === false || entityData.IsActive === false;
+
+            if (isTombstone) {
+              await db.runAsync(
+                "UPDATE LocalProducts SET IsActive = 0, IsSalePriceConfigured = 0, IsDeleted = 1 WHERE Id = ?",
+                [pIdStr]
+              );
+            } else {
+              const serverStock = entityData.stockQuantity ?? entityData.StockQuantity ?? 0;
+              const effectiveStock = calculateEffectiveStock(
+                serverStock,
+                pendingInboundMap.get(pIdStr) || 0,
+                pendingOutboundMap.get(pIdStr) || 0,
+                pendingAdjustmentMap.get(pIdStr) || 0
+              );
+              await db.runAsync(
+                "INSERT OR REPLACE INTO LocalProducts (Id, CategoryId, SupplierId, Name, Price, Barcode, StockQuantity, ImageUrl, ImagePublicId, LowStockThreshold, IsSalePriceConfigured, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)",
+                [
+                  pIdStr,
+                  entityData.categoryId || entityData.CategoryId || 1,
+                  entityData.supplierId || entityData.SupplierId || null,
+                  entityData.name || entityData.Name,
+                  entityData.price || entityData.Price || 0,
+                  entityData.barcode || entityData.Barcode || "",
+                  effectiveStock,
+                  entityData.imageUrl || entityData.ImageUrl || null,
+                  entityData.imagePublicId || entityData.ImagePublicId || null,
+                  entityData.lowStockThreshold ?? entityData.LowStockThreshold ?? 10,
+                  (entityData.isSalePriceConfigured !== false && entityData.IsSalePriceConfigured !== false) ? 1 : 0
+                ]
+              );
+            }
+          } else if (entityType === "Category") {
+            const cId = entityData.id || entityData.Id;
+            const isTombstone = operation === "Delete" || entityData.isActive === false || entityData.IsActive === false;
+            if (isTombstone) {
+              await db.runAsync("UPDATE LocalCategories SET IsActive = 0, IsDeleted = 1 WHERE Id = ?", [cId]);
+            } else {
+              await db.runAsync(
+                "INSERT OR REPLACE INTO LocalCategories (Id, Name, Description, Code, IsSystem, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, 1, 0)",
+                [cId, entityData.name || entityData.Name, entityData.description || entityData.Description || "", entityData.code || entityData.Code || null, entityData.isSystem || entityData.IsSystem ? 1 : 0]
+              );
+            }
+          } else if (entityType === "Supplier") {
+            const sId = entityData.id || entityData.Id;
+            const isTombstone = operation === "Delete" || entityData.isActive === false || entityData.IsActive === false;
+            if (isTombstone) {
+              await db.runAsync("UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1 WHERE Id = ?", [sId]);
+            } else {
+              await db.runAsync(
+                "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, 1, 0)",
+                [sId, entityData.name || entityData.Name, entityData.contactPerson || entityData.ContactPerson || "", entityData.phone || entityData.Phone || "", entityData.address || entityData.Address || ""]
+              );
+            }
+          } else if (entityType === "Inventory") {
+            const pIdStr = String(entityData.productId || entityData.ProductId);
+            const serverStock = entityData.stockQuantity ?? entityData.StockQuantity ?? 0;
+            const effectiveStock = calculateEffectiveStock(
+              serverStock,
+              pendingInboundMap.get(pIdStr) || 0,
+              pendingOutboundMap.get(pIdStr) || 0,
+              pendingAdjustmentMap.get(pIdStr) || 0
+            );
+            await db.runAsync(
+              "UPDATE LocalProducts SET StockQuantity = ? WHERE Id = ?",
+              [effectiveStock, pIdStr]
+            );
+          } else if (entityType === "Order") {
+            const serverId = entityData.id || entityData.Id;
+            const offlineRef = entityData.offlineReferenceId || entityData.OfflineReferenceId || `SERVER_${serverId}`;
+
+            const existing = await db.getFirstAsync<{ OfflineReferenceId: string; IsSynced: number }>(
+              "SELECT OfflineReferenceId, IsSynced FROM LocalOrders WHERE OfflineReferenceId = ? OR ServerId = ?",
+              [offlineRef, serverId]
+            );
+
+            if (existing) {
+              await db.runAsync(
+                "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', ServerId = ?, TotalAmount = ?, SyncError = NULL WHERE OfflineReferenceId = ?",
+                [serverId, entityData.totalAmount || entityData.TotalAmount, existing.OfflineReferenceId]
+              );
+            } else {
+              // Pulled from another device: Upsert without deducting local inventory or creating outbox items!
+              await db.runAsync(
+                "INSERT OR REPLACE INTO LocalOrders (OfflineReferenceId, CustomerId, TotalAmount, CreatedAt, IsSynced, SyncStatus, ServerId, PaymentMethod, OwnerUserId, ShiftId) VALUES (?, ?, ?, ?, 1, 'Synced', ?, ?, ?, ?)",
+                [
+                  offlineRef,
+                  entityData.customerId || entityData.CustomerId || 1,
+                  entityData.totalAmount || entityData.TotalAmount || 0,
+                  entityData.orderDate || entityData.OrderDate || new Date().toISOString(),
+                  serverId,
+                  entityData.paymentMethod || entityData.PaymentMethod || "CASH",
+                  entityData.userId || entityData.UserId || 0,
+                  entityData.shiftId || entityData.ShiftId || null
+                ]
+              );
+
+              const details = entityData.details || entityData.Details || [];
+              for (const d of details) {
+                await db.runAsync(
+                  "INSERT INTO LocalOrderDetails (OfflineReferenceId, ProductId, Quantity, Price) VALUES (?, ?, ?, ?)",
+                  [offlineRef, String(d.productId || d.ProductId), d.quantity || d.Quantity, d.unitPrice || d.UnitPrice || 0]
+                );
+              }
+            }
+          } else if (entityType === "GoodsReceipt") {
+            const serverId = entityData.id || entityData.Id;
+            const offlineRef = entityData.offlineReferenceId || entityData.OfflineReferenceId || `SERVER_GR_${serverId}`;
+
+            const existing = await db.getFirstAsync<{ OfflineReferenceId: string; IsSynced: number }>(
+              "SELECT OfflineReferenceId, IsSynced FROM LocalGoodsReceipts WHERE OfflineReferenceId = ? OR ServerId = ?",
+              [offlineRef, serverId]
+            );
+
+            if (existing) {
+              await db.runAsync(
+                "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', ServerId = ?, TotalAmount = ?, SyncError = NULL WHERE OfflineReferenceId = ?",
+                [serverId, entityData.totalAmount || entityData.TotalAmount, existing.OfflineReferenceId]
+              );
+            } else {
+              // Pulled from another device: Upsert without adding local inventory or creating outbox items!
+              await db.runAsync(
+                "INSERT OR REPLACE INTO LocalGoodsReceipts (OfflineReferenceId, SupplierId, SupplierName, UserId, TotalAmount, Remarks, CreatedAt, IsSynced, SyncStatus, ServerId, ShiftId) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'Synced', ?, ?)",
+                [
+                  offlineRef,
+                  entityData.supplierId || entityData.SupplierId || 1,
+                  entityData.supplierName || entityData.SupplierName || "",
+                  entityData.userId || entityData.UserId || 0,
+                  entityData.totalAmount || entityData.TotalAmount || 0,
+                  entityData.remarks || entityData.Remarks || "",
+                  entityData.receiptDate || entityData.ReceiptDate || new Date().toISOString(),
+                  serverId,
+                  entityData.shiftId || entityData.ShiftId || null
+                ]
+              );
+
+              const details = entityData.details || entityData.Details || [];
+              for (const d of details) {
+                await db.runAsync(
+                  "INSERT INTO LocalGoodsReceiptDetails (OfflineReferenceId, ProductId, Quantity, CostPrice) VALUES (?, ?, ?, ?)",
+                  [offlineRef, String(d.productId || d.ProductId), d.quantity || d.Quantity, d.costPrice || d.CostPrice || 0]
+                );
+              }
+            }
+          }
+        }
+
+        // Advance cursor checkpoint inside the same transaction
+        await db.runAsync(
+          "INSERT OR REPLACE INTO SyncCheckpoints (ScopeKey, LastCursor, LastPulledAt, IsBootstrapped) VALUES ('global', ?, ?, 1)",
+          [nextCursor, new Date().toISOString()]
+        );
+      });
+    } finally {
+      await db.execAsync("PRAGMA foreign_keys = ON;");
+    }
+
+    return { appliedCount: changes.length, nextCursor, hasMore };
+  } catch (error) {
+    console.error("[DB] Lỗi khi pullIncrementalChangesAsync:", error);
+    return { appliedCount: 0, nextCursor: 0, hasMore: false };
   }
 };
 

@@ -23,9 +23,17 @@ public class ApplicationDbContext : DbContext
     public DbSet<AuditLog> AuditLogs { get; set; }
     public DbSet<StockMovement> StockMovements { get; set; }
     public DbSet<Shift> Shifts { get; set; }
+    public DbSet<SyncChange> SyncChanges { get; set; }
 
-    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    private bool _isCapturingSyncChanges = false;
+
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        if (_isCapturingSyncChanges)
+        {
+            return await base.SaveChangesAsync(cancellationToken);
+        }
+
         foreach (var entry in ChangeTracker.Entries())
         {
             if (entry.Entity is User user && (entry.State == EntityState.Added || entry.State == EntityState.Modified))
@@ -72,7 +80,180 @@ public class ApplicationDbContext : DbContext
                 }
             }
         }
-        return base.SaveChangesAsync(cancellationToken);
+
+        // Identify tracked sync candidates before saving to capture entity states
+        var candidates = ChangeTracker.Entries()
+            .Where(e => (e.State == EntityState.Added || e.State == EntityState.Modified || e.State == EntityState.Deleted) &&
+                        (e.Entity is Product || e.Entity is Category || e.Entity is Supplier || e.Entity is Inventory || e.Entity is Order || e.Entity is GoodsReceipt))
+            .Select(e => new
+            {
+                Entity = e.Entity,
+                State = e.State
+            })
+            .ToList();
+
+        var result = await base.SaveChangesAsync(cancellationToken);
+
+        if (candidates.Count > 0)
+        {
+            try
+            {
+                _isCapturingSyncChanges = true;
+                var now = DateTime.UtcNow;
+                var syncChanges = new List<SyncChange>();
+
+                foreach (var item in candidates)
+                {
+                    string entityType = "";
+                    string entityId = "";
+                    string operation = item.State == EntityState.Deleted ? "Delete" : "Upsert";
+                    string? dataJson = null;
+
+                    if (item.Entity is Product p)
+                    {
+                        entityType = "Product";
+                        entityId = p.Id.ToString();
+                        if (!p.IsActive) operation = "Delete";
+                        dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = p.Id,
+                            categoryId = p.CategoryId,
+                            supplierId = p.SupplierId,
+                            name = p.Name,
+                            price = p.Price,
+                            costPrice = p.CostPrice,
+                            barcode = p.Barcode,
+                            imageUrl = p.ImageUrl,
+                            imagePublicId = p.ImagePublicId,
+                            lowStockThreshold = p.LowStockThreshold,
+                            isSalePriceConfigured = p.IsSalePriceConfigured,
+                            isActive = p.IsActive,
+                            deactivatedAt = p.DeactivatedAt,
+                            deactivationReason = p.DeactivationReason
+                        });
+                    }
+                    else if (item.Entity is Category c)
+                    {
+                        entityType = "Category";
+                        entityId = c.Id.ToString();
+                        if (!c.IsActive) operation = "Delete";
+                        dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = c.Id,
+                            name = c.Name,
+                            description = c.Description ?? "",
+                            code = c.Code,
+                            isSystem = c.IsSystem,
+                            isActive = c.IsActive,
+                            deactivatedAt = c.DeactivatedAt,
+                            deactivationReason = c.DeactivationReason
+                        });
+                    }
+                    else if (item.Entity is Supplier s)
+                    {
+                        entityType = "Supplier";
+                        entityId = s.Id.ToString();
+                        if (!s.IsActive) operation = "Delete";
+                        dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = s.Id,
+                            name = s.Name,
+                            contactPerson = s.ContactPerson ?? "",
+                            phone = s.Phone ?? "",
+                            address = s.Address ?? "",
+                            taxCode = s.TaxCode,
+                            email = s.Email,
+                            isActive = s.IsActive
+                        });
+                    }
+                    else if (item.Entity is Inventory inv)
+                    {
+                        entityType = "Inventory";
+                        entityId = inv.ProductId.ToString();
+                        dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = inv.Id,
+                            productId = inv.ProductId,
+                            stockQuantity = inv.StockQuantity
+                        });
+                    }
+                    else if (item.Entity is Order ord)
+                    {
+                        entityType = "Order";
+                        entityId = ord.Id.ToString();
+                        dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = ord.Id,
+                            offlineReferenceId = ord.OfflineReferenceId,
+                            userId = ord.UserId,
+                            customerId = ord.CustomerId,
+                            totalAmount = ord.TotalAmount,
+                            paymentMethod = ord.PaymentMethod,
+                            orderDate = ord.OrderDate,
+                            status = ord.Status,
+                            shiftId = ord.ShiftId,
+                            details = ord.OrderDetails?.Select(d => new
+                            {
+                                id = d.Id,
+                                productId = d.ProductId,
+                                quantity = d.Quantity,
+                                unitPrice = d.UnitPrice
+                            }).ToList()
+                        });
+                    }
+                    else if (item.Entity is GoodsReceipt gr)
+                    {
+                        entityType = "GoodsReceipt";
+                        entityId = gr.Id.ToString();
+                        dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = gr.Id,
+                            offlineReferenceId = gr.OfflineReferenceId,
+                            supplierId = gr.SupplierId,
+                            supplierName = gr.Supplier?.Name,
+                            userId = gr.UserId,
+                            totalAmount = gr.TotalAmount,
+                            remarks = gr.Remarks,
+                            receiptDate = gr.ReceiptDate,
+                            status = "COMPLETED",
+                            shiftId = gr.ShiftId,
+                            details = gr.GoodsReceiptDetails?.Select(d => new
+                            {
+                                id = d.Id,
+                                productId = d.ProductId,
+                                quantity = d.Quantity,
+                                costPrice = d.CostPrice
+                            }).ToList()
+                        });
+                    }
+
+                    if (!string.IsNullOrEmpty(entityType) && !string.IsNullOrEmpty(entityId))
+                    {
+                        syncChanges.Add(new SyncChange
+                        {
+                            EntityType = entityType,
+                            EntityId = entityId,
+                            Operation = operation,
+                            ChangedAt = now,
+                            Version = now.Ticks,
+                            DataJson = dataJson
+                        });
+                    }
+                }
+
+                if (syncChanges.Count > 0)
+                {
+                    await SyncChanges.AddRangeAsync(syncChanges, cancellationToken);
+                    await base.SaveChangesAsync(cancellationToken);
+                }
+            }
+            finally
+            {
+                _isCapturingSyncChanges = false;
+            }
+        }
+
+        return result;
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -336,5 +517,16 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<Product>()
             .Property(p => p.IsSalePriceConfigured)
             .HasDefaultValue(true);
+
+        modelBuilder.Entity<SyncChange>(entity =>
+        {
+            entity.HasKey(e => e.ChangeId);
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.EntityId).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Operation).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.ChangedAt).IsRequired();
+            entity.HasIndex(e => e.ChangeId);
+            entity.HasIndex(e => new { e.EntityType, e.ChangedAt });
+        });
     }
 }

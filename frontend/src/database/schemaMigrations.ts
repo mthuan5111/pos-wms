@@ -5,7 +5,7 @@ export interface SQLiteDatabaseAdapter {
   getFirstAsync<T = any>(sql: string, ...params: any[]): Promise<T | null>;
 }
 
-export const TARGET_SCHEMA_VERSION = 7;
+export const TARGET_SCHEMA_VERSION = 8;
 export const TARGET_DATA_GENERATION = "20260922_GEN2";
 
 export async function safeAddColumn(
@@ -250,16 +250,36 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
         BeforeQty INTEGER NOT NULL,
         AfterQty INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS SyncCheckpoints (
+        ScopeKey TEXT PRIMARY KEY,
+        LastCursor INTEGER DEFAULT 0,
+        LastPulledAt TEXT,
+        IsBootstrapped INTEGER DEFAULT 0
+      );
     `);
 
     // Ensure all schema columns exist across older installs (idempotent safeAddColumn)
     await safeAddColumn(db, "LocalCategories", "Description", "TEXT");
     await safeAddColumn(db, "LocalCategories", "Code", "TEXT");
     await safeAddColumn(db, "LocalCategories", "IsSystem", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalCategories", "IsActive", "INTEGER DEFAULT 1");
+    await safeAddColumn(db, "LocalCategories", "UpdatedAt", "TEXT");
+    await safeAddColumn(db, "LocalCategories", "IsDeleted", "INTEGER DEFAULT 0");
+
+    await safeAddColumn(db, "LocalSuppliers", "IsActive", "INTEGER DEFAULT 1");
+    await safeAddColumn(db, "LocalSuppliers", "UpdatedAt", "TEXT");
+    await safeAddColumn(db, "LocalSuppliers", "IsDeleted", "INTEGER DEFAULT 0");
+
     await safeAddColumn(db, "LocalProducts", "SupplierId", "INTEGER");
     await safeAddColumn(db, "LocalProducts", "LowStockThreshold", "INTEGER DEFAULT 10");
     await safeAddColumn(db, "LocalProducts", "IsSalePriceConfigured", "INTEGER DEFAULT 1");
     await safeAddColumn(db, "LocalProducts", "ImagePublicId", "TEXT");
+    await safeAddColumn(db, "LocalProducts", "ServerVersion", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalProducts", "UpdatedAt", "TEXT");
+    await safeAddColumn(db, "LocalProducts", "IsDeleted", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalProducts", "LastSyncedAt", "TEXT");
+    await safeAddColumn(db, "LocalProducts", "IsActive", "INTEGER DEFAULT 1");
 
     await safeAddColumn(db, "LocalOrders", "CustomerId", "INTEGER");
     await safeAddColumn(db, "LocalOrders", "OwnerUserId", "INTEGER");
@@ -269,17 +289,28 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
     await safeAddColumn(db, "LocalOrders", "SyncRetryCount", "INTEGER DEFAULT 0");
     await safeAddColumn(db, "LocalOrders", "SyncStatus", "TEXT DEFAULT 'Pending'");
     await safeAddColumn(db, "LocalOrders", "ShiftId", "INTEGER");
+    await safeAddColumn(db, "LocalOrders", "ServerVersion", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalOrders", "LastSyncedAt", "TEXT");
+    await safeAddColumn(db, "LocalOrders", "NextRetryAt", "TEXT");
+    await safeAddColumn(db, "LocalOrders", "LastSafeErrorCode", "TEXT");
 
     await safeAddColumn(db, "LocalGoodsReceipts", "ServerId", "INTEGER");
     await safeAddColumn(db, "LocalGoodsReceipts", "SyncError", "TEXT");
     await safeAddColumn(db, "LocalGoodsReceipts", "SyncRetryCount", "INTEGER DEFAULT 0");
     await safeAddColumn(db, "LocalGoodsReceipts", "SyncStatus", "TEXT DEFAULT 'Pending'");
     await safeAddColumn(db, "LocalGoodsReceipts", "ShiftId", "INTEGER");
+    await safeAddColumn(db, "LocalGoodsReceipts", "ServerVersion", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalGoodsReceipts", "LastSyncedAt", "TEXT");
+    await safeAddColumn(db, "LocalGoodsReceipts", "NextRetryAt", "TEXT");
+    await safeAddColumn(db, "LocalGoodsReceipts", "LastSafeErrorCode", "TEXT");
 
     await safeAddColumn(db, "LocalStockAdjustments", "SyncStatus", "TEXT DEFAULT 'Pending'");
     await safeAddColumn(db, "LocalStockAdjustments", "SyncError", "TEXT");
     await safeAddColumn(db, "LocalStockAdjustments", "RetryCount", "INTEGER DEFAULT 0");
     await safeAddColumn(db, "LocalStockAdjustments", "ShiftId", "INTEGER");
+    await safeAddColumn(db, "LocalStockAdjustments", "NextRetryAt", "TEXT");
+    await safeAddColumn(db, "LocalStockAdjustments", "LastSafeErrorCode", "TEXT");
+    await safeAddColumn(db, "LocalStockAdjustments", "LastSyncedAt", "TEXT");
 
     await db.runAsync("DELETE FROM _schema_version");
     await db.runAsync("INSERT INTO _schema_version (version) VALUES (?)", TARGET_SCHEMA_VERSION);

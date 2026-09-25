@@ -67,6 +67,15 @@ if ($smType -ne 'nvarchar' -or $smLen -ne 100) {
     exit 1
 }
 
+# Verify SyncChanges table
+$scSql = "SELECT COUNT(*) as Cnt FROM sys.tables WHERE name = 'SyncChanges'"
+$scRes = Query-Sql $scSql
+if ($scRes.Rows[0]['Cnt'] -ne 1) {
+    Write-Error "[FAIL] SyncChanges table does not exist!"
+    exit 1
+}
+Write-Output "[PASS] SyncChanges table verified successfully on fresh database."
+
 # Verify the 3 unique filtered indexes
 $idxSql = @"
 SELECT 

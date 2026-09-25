@@ -77,6 +77,10 @@ namespace POS_WMS.WebApi.Controllers
             {
                 return BadRequest(ApiResponse<bool>.Failure(ex.Message));
             }
+            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
+            {
+                return Conflict(ApiResponse<bool>.Failure($"Xung đột đồng thời (RowVersion đã thay đổi): {ex.Message}"));
+            }
             catch (Exception ex)
             {
                 return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));

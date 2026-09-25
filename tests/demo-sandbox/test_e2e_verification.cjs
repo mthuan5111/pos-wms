@@ -106,8 +106,8 @@ async function runTests() {
   console.log(`[DEMO JWT] role: ${demoPayload.role}, unique_name: ${demoPayload.unique_name}, exp: ${new Date(demoPayload.exp * 1000).toISOString()}`);
 
   const mutatingTests = [
-    { name: 'POST /Users (Create user)', method: 'post', url: '/Users', data: { username: 'hacker', password: 'MOCK_TEST_PASSWORD_999!', name: 'Hacker', role: 'Admin' } },
-    { name: 'PUT /Users/1/change-password', method: 'put', url: '/Users/1/change-password', data: { currentPassword: 'MOCK_TEST_PASSWORD_888!', newPassword: 'MOCK_TEST_PASSWORD_777!' } }
+    { name: 'POST /Users (Create user)', method: 'post', url: '/Users', data: { username: 'hacker', password: 'Dummy_MOCK_TEST_PASSWORD_999!', name: 'Hacker', role: 'Admin' } },
+    { name: 'PUT /Users/1/change-password', method: 'put', url: '/Users/1/change-password', data: { currentPassword: 'Dummy_MOCK_TEST_PASSWORD_888!', newPassword: 'Dummy_MOCK_TEST_PASSWORD_777!' } }
   ];
 
   for (const t of mutatingTests) {
@@ -130,7 +130,7 @@ async function runTests() {
   try {
     await axios.post(`${BASE_URL}/Auth/login`, {
       username: 'admin',
-      password: 'MOCK_INVALID_PASSWORD_XYZ_123'
+      password: 'Dummy_MOCK_INVALID_PASSWORD_XYZ_123'
     });
     console.error('[FAIL] Login with wrong password succeeded!');
   } catch (err) {
