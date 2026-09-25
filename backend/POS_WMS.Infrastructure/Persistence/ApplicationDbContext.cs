@@ -227,6 +227,32 @@ public class ApplicationDbContext : DbContext
                         });
                     }
 
+                    if (!string.IsNullOrEmpty(dataJson))
+                    {
+                        const int MaxPayloadBytes = 32768; // 32KB
+                        if (dataJson.Length > MaxPayloadBytes)
+                        {
+                            // If payload exceeds limit, keep only identifier and version; client must fetch full details via endpoint
+                            dataJson = System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                entityId = entityId,
+                                version = now.Ticks,
+                                isOversized = true
+                            });
+                        }
+                        else
+                        {
+                            // Strict security scan: Disallow credentials, tokens, and secrets in change stream
+                            if (dataJson.Contains("PasswordHash", StringComparison.OrdinalIgnoreCase) ||
+                                dataJson.Contains("RefreshToken", StringComparison.OrdinalIgnoreCase) ||
+                                dataJson.Contains("AccessToken", StringComparison.OrdinalIgnoreCase) ||
+                                dataJson.Contains("ConnectionString", StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new InvalidOperationException("CRITICAL SECURITY ERROR: Sensitive credential detected in SyncChange DataJson payload.");
+                            }
+                        }
+                    }
+
                     if (!string.IsNullOrEmpty(entityType) && !string.IsNullOrEmpty(entityId))
                     {
                         syncChanges.Add(new SyncChange

@@ -179,16 +179,16 @@ async function runSuite() {
   cleanupDbFiles();
 
   // 1. Authenticate users
-  console.log('[INIT] Authenticating Admin and Cashier1...');
-  const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || 'Admin@123';
-  const adminLogin = await axios.post(`${BASE_URL}/Auth/login`, { username: 'admin', password: ADMIN_PASSWORD });
+  console.log('[INIT] Authenticating dedicated test users (test_sync_admin & test_sync_cashier)...');
+  const TEST_PASSWORD = process.env.TEST_USER_PASSWORD || 'TestUser@2026!';
+  const adminLogin = await axios.post(`${BASE_URL}/Auth/login`, { username: 'test_sync_admin', password: TEST_PASSWORD });
   const adminToken = adminLogin.data.data.accessToken;
   const adminHeaders = { Authorization: `Bearer ${adminToken}` };
 
-  const cashierLogin = await axios.post(`${BASE_URL}/Auth/login`, { username: 'cashier1', password: ADMIN_PASSWORD });
+  const cashierLogin = await axios.post(`${BASE_URL}/Auth/login`, { username: 'test_sync_cashier', password: TEST_PASSWORD });
   const cashierToken = cashierLogin.data.data.accessToken;
   const cashierHeaders = { Authorization: `Bearer ${cashierToken}` };
-  console.log('✓ Authentication successful (Admin ID: 1, Cashier1 ID: 2)\n');
+  console.log(`✓ Authentication successful (Admin ID: ${adminLogin.data.data.id}, Cashier ID: ${cashierLogin.data.data.id})\n`);
 
   // ---------------------------------------------------------------------------
   // TEST A: BOOTSTRAP ON EMPTY SQLITE

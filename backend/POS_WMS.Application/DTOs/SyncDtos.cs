@@ -16,6 +16,8 @@ namespace POS_WMS.Application.DTOs
 
     public class SyncPullResponseDto
     {
+        public bool RequiresBootstrap { get; set; } = false;
+        public long MinimumAvailableCursor { get; set; } = 0;
         public List<SyncChangeDto> Changes { get; set; } = new();
         public long NextCursor { get; set; }
         public bool HasMore { get; set; }
@@ -26,6 +28,7 @@ namespace POS_WMS.Application.DTOs
     public class SyncCursorResponseDto
     {
         public long CurrentCursor { get; set; }
+        public long MinimumAvailableCursor { get; set; } = 0;
         public DateTime ServerTime { get; set; } = DateTime.UtcNow;
     }
 }
