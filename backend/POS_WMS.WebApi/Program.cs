@@ -15,34 +15,32 @@ using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
+const string CorsPolicyName = "FrontendCors";
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("SafeCORS", policy =>
+    options.AddPolicy(CorsPolicyName, policy =>
     {
-        if (builder.Environment.IsDevelopment())
+        if (allowedOrigins.Length > 0)
         {
-            policy.SetIsOriginAllowed(origin => true)
+            policy.WithOrigins(allowedOrigins)
                   .AllowAnyHeader()
                   .AllowAnyMethod();
         }
         else
         {
-            if (allowedOrigins.Length > 0)
-            {
-                policy.WithOrigins(allowedOrigins)
-                      .AllowAnyHeader()
-                      .AllowAnyMethod()
-                      .AllowCredentials();
-            }
-            else
-            {
-                // Fallback for production if no origins specified
-                policy.AllowAnyOrigin()
-                      .AllowAnyHeader()
-                      .AllowAnyMethod();
-            }
+            // Explicit production whitelist fallback if configuration is missing (no wildcard)
+            policy.WithOrigins(
+                "https://pos-wms-frontend.com",
+                "http://localhost:8081",
+                "http://localhost:8082",
+                "http://localhost:3000",
+                "http://127.0.0.1:8081",
+                "http://127.0.0.1:8082"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod();
         }
     });
 });
@@ -145,7 +143,8 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseStaticFiles();
-app.UseCors("SafeCORS");
+app.UseRouting();
+app.UseCors(CorsPolicyName);
 app.UseMiddleware<POS_WMS.WebApi.Middlewares.GlobalExceptionMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
