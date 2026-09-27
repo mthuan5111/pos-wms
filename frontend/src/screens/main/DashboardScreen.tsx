@@ -3,7 +3,7 @@ import { View, Text, ScrollView, RefreshControl, Platform, Alert, ActivityIndica
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
-import { LineChart } from "react-native-chart-kit";
+import DashboardChart from "../../components/DashboardChart";
 import {
   getDashboardSummary,
   getTopProducts,
@@ -680,7 +680,7 @@ export default function DashboardScreen() {
                         <Text style={{ fontSize: 11, color: '#525252', marginTop: 4 }}>Dữ liệu bán hàng trong khoảng thời gian này sẽ xuất hiện tại đây.</Text>
                       </View>
                     ) : (
-                      <LineChart
+                      <DashboardChart
                         data={{
                           labels: chartState.data.map(d => d.label),
                           datasets: [
