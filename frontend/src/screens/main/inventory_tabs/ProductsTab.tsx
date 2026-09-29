@@ -46,7 +46,7 @@ import CameraCaptureModal from "@/components/CameraCaptureModal";
 import DeactivateModal from "@/components/DeactivateModal";
 import FieldLabel, { FieldError } from "@/components/FieldLabel";
 
-interface Category extends LocalCategoryRow {}
+interface Category extends LocalCategoryRow { }
 interface Product extends LocalProductRow {
   CategoryName?: string;
   SupplierName?: string;
@@ -293,8 +293,8 @@ export default function ProductsTab({
         await loadData();
 
         useModalStore.getState().showModal({
-          title: "Thành công (Demo Sandbox)",
-          message: `Đã điều chỉnh tồn kho thử nghiệm sản phẩm "${selectedProduct.Name}" (${diff > 0 ? "+" : ""}${diff}) trong Sandbox. Không ảnh hưởng dữ liệu chính.`,
+          title: "Thành công",
+          message: `Đã điều chỉnh tồn kho thử nghiệm sản phẩm "${selectedProduct.Name}" (${diff > 0 ? "+" : ""}${diff}).`,
           type: "success",
         });
         return;

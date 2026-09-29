@@ -28,7 +28,6 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
 
   const activeIndex = props.state.index;
   const activeRoute = props.state.routes[activeIndex]?.name;
-  console.log('[DesktopSidebar] render activeIndex:', activeIndex, 'activeRoute:', activeRoute);
 
   return (
     <View
@@ -74,7 +73,6 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
           const meta = ROUTE_META[route.name] || { label: route.name, icon: "cube-outline" };
 
           const onPress = () => {
-            console.log('[DesktopSidebar] Navigating to:', route.name);
             const event = props.navigation.emit({
               type: 'tabPress',
               target: route.key,
@@ -83,7 +81,7 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
 
             if (!isFocused && !event.defaultPrevented) {
               props.navigation.dispatch({
-                ...CommonActions.navigate({ name: route.name, merge: true }),
+                ...CommonActions.navigate(route.name, undefined, { merge: true }),
                 target: props.state.key,
               });
             }
@@ -93,6 +91,8 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
             <TouchableOpacity
               key={route.key}
               testID={`sidebar-nav-${route.name.toLowerCase()}`}
+              accessibilityRole="button"
+              accessibilityLabel={meta.label}
               onPress={onPress}
               activeOpacity={0.8}
               className={`flex-row items-center px-4 py-3 mb-1.5 border-2 ${
@@ -137,6 +137,8 @@ export default function DesktopSidebar(props: BottomTabBarProps) {
 
         <TouchableOpacity
           testID="sidebar-logout-btn"
+          accessibilityRole="button"
+          accessibilityLabel="Đăng xuất"
           onPress={handleLogout}
           className="border border-black py-2 px-3 bg-white flex-row items-center justify-center"
         >

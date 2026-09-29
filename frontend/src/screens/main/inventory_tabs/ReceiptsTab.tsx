@@ -154,7 +154,7 @@ export default function ReceiptsTab() {
     try {
       const db = await getDBConnection();
       const supRows = await db.getAllAsync<{ Id: number; Name: string }>(
-        "SELECT Id, Name FROM LocalSuppliers ORDER BY Name ASC"
+        "SELECT Id, Name FROM LocalSuppliers WHERE (IsDeleted = 0 OR IsDeleted IS NULL) AND (IsActive = 1 OR IsActive IS NULL) ORDER BY Name ASC"
       );
       const prodRows = await db.getAllAsync<{ Id: string; Name: string; Price: number; StockQuantity: number }>(
         "SELECT Id, Name, Price, StockQuantity FROM LocalProducts ORDER BY Name ASC"
@@ -310,8 +310,8 @@ export default function ReceiptsTab() {
         await loadReceipts();
 
         useModalStore.getState().showModal({
-          title: "Thành công (Demo Sandbox)",
-          message: `Đã tạo phiếu nhập kho thử nghiệm ${demoRefId} thành công trong Sandbox. Không ảnh hưởng dữ liệu chính.`,
+          title: "Thành công",
+          message: `Đã tạo phiếu nhập kho thử nghiệm ${demoRefId} thành công.`,
           type: "success",
         });
         return;
@@ -359,17 +359,17 @@ export default function ReceiptsTab() {
     if (!selectedReceipt) return;
     const items = (selectedReceipt.details && selectedReceipt.details.length > 0)
       ? selectedReceipt.details.map(d => ({
-          productName: d.ProductName,
-          quantity: d.Quantity,
-          costPrice: d.CostPrice,
-          lineTotal: d.Quantity * d.CostPrice
-        }))
+        productName: d.ProductName,
+        quantity: d.Quantity,
+        costPrice: d.CostPrice,
+        lineTotal: d.Quantity * d.CostPrice
+      }))
       : [{
-          productName: 'Hàng hóa nhập kho',
-          quantity: 1,
-          costPrice: selectedReceipt.TotalAmount,
-          lineTotal: selectedReceipt.TotalAmount
-        }];
+        productName: 'Hàng hóa nhập kho',
+        quantity: 1,
+        costPrice: selectedReceipt.TotalAmount,
+        lineTotal: selectedReceipt.TotalAmount
+      }];
 
     const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
     const isReceiptDemo = isDemo || selectedReceipt.OfflineReferenceId?.startsWith('DEMO-');
@@ -469,8 +469,8 @@ export default function ReceiptsTab() {
                 {item.OfflineReferenceId.startsWith("DEMO-")
                   ? `${formatCurrency(item.TotalAmount)} (Mô phỏng)`
                   : canViewCostPrice && item.TotalAmount != null
-                  ? formatCurrency(item.TotalAmount)
-                  : "Không có quyền xem"}
+                    ? formatCurrency(item.TotalAmount)
+                    : "Không có quyền xem"}
               </Text>
             </View>
 
@@ -509,8 +509,8 @@ export default function ReceiptsTab() {
                       {item.OfflineReferenceId.startsWith("DEMO-")
                         ? formatCurrency(d.CostPrice || 0)
                         : canViewCostPrice
-                        ? formatCurrency(d.CostPrice || 0)
-                        : "---"}
+                          ? formatCurrency(d.CostPrice || 0)
+                          : "---"}
                     </Text>
                   </View>
                 ))}
@@ -602,14 +602,12 @@ export default function ReceiptsTab() {
                             setSelectedSupplierId(s.Id);
                             setSelectedSupplierName(s.Name);
                           }}
-                          className={`px-3 py-2 border-2 ${
-                            isSelected ? "border-black bg-black" : "border-gray-300 bg-white"
-                          }`}
+                          className={`px-3 py-2 border-2 ${isSelected ? "border-black bg-black" : "border-gray-300 bg-white"
+                            }`}
                         >
                           <Text
-                            className={`font-bold text-xs ${
-                              isSelected ? "text-white" : "text-black"
-                            }`}
+                            className={`font-bold text-xs ${isSelected ? "text-white" : "text-black"
+                              }`}
                           >
                             {s.Name}
                           </Text>
@@ -650,9 +648,8 @@ export default function ReceiptsTab() {
                         key={p.Id}
                         testID={`receipt-prod-option-${p.Id}`}
                         onPress={() => handleAddProductToReceipt(p)}
-                        className={`flex-row justify-between items-center p-2 border-b border-gray-100 ${
-                          isAdded ? "bg-gray-50" : "bg-white"
-                        }`}
+                        className={`flex-row justify-between items-center p-2 border-b border-gray-100 ${isAdded ? "bg-gray-50" : "bg-white"
+                          }`}
                       >
                         <View className="flex-1 mr-2">
                           <Text className="font-bold text-xs text-black" numberOfLines={1}>
@@ -792,9 +789,8 @@ export default function ReceiptsTab() {
                 accessibilityLabel="submit-receipt-btn"
                 disabled={isSubmitting}
                 onPress={handleSaveReceipt}
-                className={`px-6 py-2 bg-black flex-row items-center ${
-                  isSubmitting ? "opacity-60" : ""
-                }`}
+                className={`px-6 py-2 bg-black flex-row items-center ${isSubmitting ? "opacity-60" : ""
+                  }`}
               >
                 {isSubmitting ? (
                   <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
@@ -855,9 +851,8 @@ export default function ReceiptsTab() {
                 <View className="flex-row justify-between mb-1">
                   <Text className="text-gray-500 text-xs font-bold">Trạng thái đồng bộ:</Text>
                   <Text
-                    className={`text-xs font-black uppercase ${
-                      selectedReceipt?.IsSynced === 1 ? "text-green-700" : "text-red-700"
-                    }`}
+                    className={`text-xs font-black uppercase ${selectedReceipt?.IsSynced === 1 ? "text-green-700" : "text-red-700"
+                      }`}
                   >
                     {selectedReceipt?.IsSynced === 1 ? "Đã đồng bộ lên máy chủ" : "Chưa đồng bộ (Local)"}
                   </Text>
@@ -924,8 +919,8 @@ export default function ReceiptsTab() {
                   {selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')
                     ? `${formatCurrency(selectedReceipt.TotalAmount)} (Mô phỏng)`
                     : canViewCostPrice && selectedReceipt?.TotalAmount != null
-                    ? formatCurrency(selectedReceipt.TotalAmount)
-                    : "Không có quyền xem"}
+                      ? formatCurrency(selectedReceipt.TotalAmount)
+                      : "Không có quyền xem"}
                 </Text>
               </View>
             </ScrollView>

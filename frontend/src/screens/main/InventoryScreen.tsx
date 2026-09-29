@@ -70,28 +70,37 @@ export default function InventoryScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, flexDirection: 'row' }}>
             <TouchableOpacity
               testID="tab-products"
+              accessibilityRole="tab"
+              accessibilityLabel="Sản phẩm"
+              accessibilityState={{ selected: activeTab === "products" }}
               onPress={() => setActiveTab("products")}
               className={`flex-1 min-w-[90px] items-center pb-2.5 ${activeTab === "products" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "products" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "products" ? "text-black" : "text-neutral-600"}`}>
                 Sản phẩm
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID="tab-categories"
+              accessibilityRole="tab"
+              accessibilityLabel="Danh mục"
+              accessibilityState={{ selected: activeTab === "categories" }}
               onPress={() => setActiveTab("categories")}
               className={`flex-1 min-w-[90px] items-center pb-2.5 ${activeTab === "categories" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "categories" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "categories" ? "text-black" : "text-neutral-600"}`}>
                 Danh mục
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID="tab-suppliers"
+              accessibilityRole="tab"
+              accessibilityLabel="Nhà cung cấp"
+              accessibilityState={{ selected: activeTab === "suppliers" }}
               onPress={() => setActiveTab("suppliers")}
               className={`flex-1 min-w-[110px] items-center pb-2.5 ${activeTab === "suppliers" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "suppliers" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "suppliers" ? "text-black" : "text-neutral-600"}`}>
                 Nhà cung cấp
               </Text>
             </TouchableOpacity>

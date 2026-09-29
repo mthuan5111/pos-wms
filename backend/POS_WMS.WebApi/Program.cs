@@ -16,32 +16,113 @@ using Microsoft.AspNetCore.HttpOverrides;
 var builder = WebApplication.CreateBuilder(args);
 
 const string CorsPolicyName = "FrontendCors";
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+
+// 1. Thu thập danh sách allowed origins từ cấu hình appsettings và biến môi trường
+var configOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+var envOriginsString = builder.Configuration["CORS_ALLOWED_ORIGINS"]
+    ?? builder.Configuration["Cors:AllowedOrigins"]
+    ?? string.Empty;
+
+var rawOrigins = new List<string>(configOrigins);
+if (!string.IsNullOrWhiteSpace(envOriginsString))
+{
+    var split = envOriginsString.Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+    rawOrigins.AddRange(split);
+}
+
+// 2. Chuẩn hóa: trim khoảng trắng, bỏ dấu '/' cuối URL, loại bỏ phần tử rỗng và trùng lặp
+var allowedOriginsSet = rawOrigins
+    .Select(o => o.Trim().TrimEnd('/'))
+    .Where(o => !string.IsNullOrEmpty(o))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+// 3. Danh sách origin phát triển mặc định (localhost, 127.0.0.1 các cổng thông dụng)
+var devOrigins = new[]
+{
+    "http://localhost:8081",
+    "http://localhost:8082",
+    "http://localhost:3000",
+    "http://localhost:5050",
+    "http://localhost:5173",
+    "http://localhost:19006",
+    "http://127.0.0.1:8081",
+    "http://127.0.0.1:8082",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5050"
+};
+
+bool isDevelopment = builder.Environment.IsDevelopment();
+bool allowExpoTunnel = isDevelopment ||
+    builder.Configuration.GetValue<bool>("Cors:AllowExpoTunnel") ||
+    string.Equals(builder.Configuration["CORS_ALLOW_EXPO_TUNNEL"], "true", StringComparison.OrdinalIgnoreCase);
+
+if (isDevelopment)
+{
+    foreach (var devOrigin in devOrigins)
+    {
+        allowedOriginsSet.Add(devOrigin);
+    }
+}
+else
+{
+    // Fallback domain production nếu chưa cấu hình trong biến môi trường
+    if (allowedOriginsSet.Count == 0)
+    {
+        allowedOriginsSet.Add("https://pos-wms-frontend.com");
+    }
+}
+
+// Startup validation & diagnostics logging (không ghi thông tin nhạy cảm)
+Console.WriteLine($"[CORS Startup] Môi trường: {builder.Environment.EnvironmentName}, Cho phép Expo Tunnel: {allowExpoTunnel}, Tổng Origins cho phép: {allowedOriginsSet.Count}");
+foreach (var origin in allowedOriginsSet)
+{
+    Console.WriteLine($"[CORS Startup] -> Cho phép: {origin}");
+}
+
+// Hàm kiểm tra Origin hợp lệ với quy tắc nghiêm ngặt
+bool IsOriginPermitted(string? origin)
+{
+    if (string.IsNullOrWhiteSpace(origin)) return false;
+    var normalized = origin.Trim().TrimEnd('/');
+
+    if (allowedOriginsSet.Contains(normalized)) return true;
+
+    // Trong môi trường development cho phép mọi port của localhost / 127.0.0.1
+    if (isDevelopment && Uri.TryCreate(normalized, UriKind.Absolute, out var uriDev))
+    {
+        if ((uriDev.Scheme == Uri.UriSchemeHttp || uriDev.Scheme == Uri.UriSchemeHttps) &&
+            (uriDev.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+             uriDev.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+    }
+
+    // Expo tunnel: Chỉ cho phép HTTPS và hostname phải kết thúc bằng .exp.direct
+    if (allowExpoTunnel && Uri.TryCreate(normalized, UriKind.Absolute, out var uriTunnel))
+    {
+        if (uriTunnel.Scheme == Uri.UriSchemeHttps &&
+            (uriTunnel.Host.Equals("exp.direct", StringComparison.OrdinalIgnoreCase) ||
+             uriTunnel.Host.EndsWith(".exp.direct", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Đăng ký bộ validator vào DI để middleware exception có thể tái sử dụng
+builder.Services.AddSingleton<Func<string?, bool>>(IsOriginPermitted);
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(CorsPolicyName, policy =>
     {
-        if (allowedOrigins.Length > 0)
-        {
-            policy.WithOrigins(allowedOrigins)
-                  .AllowAnyHeader()
-                  .AllowAnyMethod();
-        }
-        else
-        {
-            // Explicit production whitelist fallback if configuration is missing (no wildcard)
-            policy.WithOrigins(
-                "https://pos-wms-frontend.com",
-                "http://localhost:8081",
-                "http://localhost:8082",
-                "http://localhost:3000",
-                "http://127.0.0.1:8081",
-                "http://127.0.0.1:8082"
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod();
-        }
+        policy.SetIsOriginAllowed(IsOriginPermitted)
+              .AllowAnyHeader()
+              .AllowAnyMethod();
     });
 });
 
@@ -137,6 +218,8 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseMiddleware<POS_WMS.WebApi.Middlewares.GlobalExceptionMiddleware>();
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
@@ -145,11 +228,16 @@ if (!app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseRouting();
 app.UseCors(CorsPolicyName);
-app.UseMiddleware<POS_WMS.WebApi.Middlewares.GlobalExceptionMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "Healthy",
+    timestamp = DateTime.UtcNow,
+    environment = app.Environment.EnvironmentName
+}));
 
 app.Run();
 

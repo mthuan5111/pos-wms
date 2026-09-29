@@ -203,7 +203,7 @@ export default function StatisticsScreen() {
             "SELECT * FROM LocalStockAdjustments WHERE CreatedAt LIKE ? OR CreatedAt LIKE ?",
             [`${localToday}%`, `${utcToday}%`]
           );
-        } catch {}
+        } catch { }
 
         let inc = 0;
         let dec = 0;
@@ -391,7 +391,7 @@ export default function StatisticsScreen() {
         setReportData(closedReport);
         showModal({
           title: 'Đã kết thúc ca trải nghiệm',
-          message: 'Ca làm việc thử nghiệm đã được đóng và ghi nhận trong Demo Sandbox.',
+          message: 'Ca làm việc thử nghiệm đã được đóng và ghi nhận trong không gian trải nghiệm.',
           type: 'success'
         });
         setShowPrintModal(true);
@@ -410,8 +410,8 @@ export default function StatisticsScreen() {
       setReportData(closedReport);
 
       showModal({
-        title: 'Đã kết thúc ca làm việc.',
-        message: 'Ca làm việc đã được đóng và khóa snapshot thành công.',
+        title: 'Đã kết thúc ca làm việc',
+        message: 'Ca làm việc đã được đóng và chốt sổ dữ liệu thành công.',
         type: 'success'
       });
 
@@ -484,7 +484,7 @@ export default function StatisticsScreen() {
         <View className="border-2 border-black p-5 mb-6 bg-white">
           <View className="flex-row justify-between items-center mb-3">
             <Text className="font-black text-black uppercase tracking-widest text-xs">
-              Ca làm việc {isDemo ? 'trải nghiệm (Demo Sandbox)' : (role === 'Cashier' ? 'thu ngân' : role === 'WarehouseStaff' ? 'thủ kho' : 'quản lý')}
+              Ca làm việc {isDemo ? 'trải nghiệm' : (role === 'Cashier' ? 'thu ngân' : role === 'WarehouseStaff' ? 'thủ kho' : 'quản lý')}
             </Text>
             <View className={`px-2 py-0.5 border ${hasActiveShift ? 'bg-green-100 border-green-600' : 'bg-yellow-100 border-yellow-600'}`}>
               <Text className={`text-[10px] font-bold ${hasActiveShift ? 'text-green-800' : 'text-yellow-800'}`}>

@@ -57,7 +57,7 @@ interface Product {
   isActive?: boolean;
 }
 
-interface Customer extends LocalCustomerRow {}
+interface Customer extends LocalCustomerRow { }
 
 export default function PosScreen() {
   const isDesktop = useIsDesktop();
@@ -403,8 +403,8 @@ export default function PosScreen() {
         );
 
         useModalStore.getState().showModal({
-          title: "Thành công (Sandbox)",
-          message: `Tạo đơn hàng trải nghiệm thành công!\nMã đơn: ${demoOrderRes.offlineReferenceId}\n(Dữ liệu lưu an toàn trong Demo Sandbox, không ảnh hưởng cơ sở dữ liệu chính)`,
+          title: "Đã tạo đơn hàng trải nghiệm",
+          message: `Đơn hàng đã được lưu trong phiên trải nghiệm.\nMã đơn: ${demoOrderRes.offlineReferenceId}`,
           type: "success"
         });
         return;

@@ -44,7 +44,7 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
 
     if (activeRoute !== routeName && !event.defaultPrevented) {
       props.navigation.dispatch({
-        ...CommonActions.navigate({ name: routeName, merge: true }),
+        ...CommonActions.navigate(routeName, undefined, { merge: true }),
         target: props.state.key,
       });
     }
@@ -93,6 +93,8 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
             <TouchableOpacity
               key={route.key}
               testID={`bottom-tab-${route.name.toLowerCase()}`}
+              accessibilityRole="button"
+              accessibilityLabel={meta.label}
               onPress={() => navigateTo(route.name, route.key)}
               activeOpacity={0.7}
               style={{
@@ -140,6 +142,8 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
         {useCompactMenu && (
           <TouchableOpacity
             testID="bottom-tab-more"
+            accessibilityRole="button"
+            accessibilityLabel="Thêm menu"
             onPress={() => setIsMoreMenuVisible(true)}
             activeOpacity={0.7}
             style={{

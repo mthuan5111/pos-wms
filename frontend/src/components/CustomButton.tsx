@@ -32,7 +32,8 @@ export default function CustomButton({ title, onPress, loading, disabled, classN
     return (
         <TouchableOpacity
             testID={testID}
-            accessibilityLabel={accessibilityLabel}
+            accessibilityRole="button"
+            accessibilityLabel={accessibilityLabel || title}
             onPress={onPress}
             disabled={disabled || loading}
             className={`${baseStyles} ${variantStyles[variant]} ${disabledStyle} ${className || ''}`}

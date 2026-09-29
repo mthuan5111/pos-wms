@@ -40,6 +40,7 @@ export default function SuppliersTab() {
   });
   const [supplierErrors, setSupplierErrors] = useState<{ name?: string; phone?: string }>({});
   const isSubmittingRef = React.useRef(false);
+  const isDeletingRef = React.useRef(false);
 
   const { user } = useAuthStore();
   const role = user?.role || "";
@@ -51,7 +52,9 @@ export default function SuppliersTab() {
     setIsLoading(true);
     try {
       const db = await getDBConnection();
-      const rows = await db.getAllAsync<LocalSupplierRow>("SELECT * FROM LocalSuppliers");
+      const rows = await db.getAllAsync<LocalSupplierRow>(
+        "SELECT * FROM LocalSuppliers WHERE (IsDeleted = 0 OR IsDeleted IS NULL) AND (IsActive = 1 OR IsActive IS NULL) ORDER BY Name ASC"
+      );
       setSuppliers(rows || []);
     } catch (error) {
       console.warn("[Inventory] Lỗi tải dữ liệu nhà cung cấp:", error);
@@ -189,47 +192,120 @@ export default function SuppliersTab() {
   };
 
   const handleDeleteSupplier = (sup: LocalSupplierRow) => {
+    if (isDeletingRef.current || isLoading) return;
+
     useModalStore.getState().showModal({
-      title: "Xác nhận xóa",
-      message: `Bạn có chắc chắn muốn xóa nhà cung cấp ${sup.Name}?`,
+      title: "Xóa nhà cung cấp?",
+      message: `Nhà cung cấp "${sup.Name}" sẽ bị xóa khỏi danh sách.`,
       type: "confirm",
       destructive: true,
+      confirmText: "Xóa nhà cung cấp",
+      cancelText: "Hủy",
       onConfirm: async () => {
+        if (isDeletingRef.current) return;
+        isDeletingRef.current = true;
+        useModalStore.getState().setLoading(true);
+
         try {
-          useModalStore.getState().setLoading(true);
-          await deleteSupplier(sup.Id);
           const db = await getDBConnection();
-          await db.runAsync("DELETE FROM LocalSuppliers WHERE Id = ?", [sup.Id]);
-          invalidateSupplier();
-          await loadData();
-          useModalStore.getState().showModal({ title: "Thành công", message: "Đã xóa nhà cung cấp", type: "success" });
-        } catch (e: any) {
-          const apiError = parseApiError(e);
-          useModalStore.getState().showModal({
-            title: "Ngừng sử dụng",
-            message: "Nhà cung cấp đã phát sinh phiếu nhập hoặc chứng từ liên kết nên không thể xóa vĩnh viễn. Bạn có muốn chuyển sang trạng thái Ngừng sử dụng?",
-            type: "confirm",
-            destructive: true,
-            confirmText: "Ngừng sử dụng",
-            onConfirm: async () => {
-              try {
-                await apiClient.put(`/Suppliers/${sup.Id}/deactivate`, { reason: "Ngừng sử dụng theo yêu cầu quản trị" });
-                invalidateSupplier();
-                await loadData();
-                useModalStore.getState().showModal({
-                  title: "Thành công",
-                  message: `Đã ngừng sử dụng nhà cung cấp "${sup.Name}".`,
-                  type: "success"
-                });
-              } catch (deactErr: any) {
-                useModalStore.getState().showModal({
-                  title: "Lỗi",
-                  message: deactErr.response?.data?.message || "Không thể ngừng sử dụng nhà cung cấp.",
-                  type: "error"
-                });
-              }
+          try {
+            await deleteSupplier(sup.Id);
+            // Online hard/soft delete succeeded on server
+            await db.runAsync(
+              "UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = 'Synced', SyncAction = 'DELETE', UpdatedAt = ? WHERE Id = ?",
+              [new Date().toISOString(), sup.Id]
+            );
+            invalidateSupplier();
+            await loadData();
+            useModalStore.getState().showModal({
+              title: "Thành công",
+              message: "Đã xóa nhà cung cấp.",
+              type: "success"
+            });
+          } catch (apiErr: any) {
+            const status = apiErr?.response?.status;
+            const isNetworkError = !apiErr.response || apiErr.code === 'ERR_NETWORK' || apiErr.message?.includes('Network Error') || apiErr.message?.includes('Failed to fetch');
+
+            if (isNetworkError) {
+              // OFFLINE CASE: mark locally as pending delete
+              await db.runAsync(
+                "UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = 'PendingDelete', SyncAction = 'DELETE', UpdatedAt = ? WHERE Id = ?",
+                [new Date().toISOString(), sup.Id]
+              );
+              invalidateSupplier();
+              await loadData();
+              useModalStore.getState().showModal({
+                title: "Đã lưu thay đổi trên thiết bị",
+                message: `Yêu cầu xóa nhà cung cấp "${sup.Name}" đã được lưu trên thiết bị và sẽ được tự động đồng bộ khi có kết nối mạng.`,
+                type: "success"
+              });
+              return;
             }
-          });
+
+            if (status === 409) {
+              // IN-USE CASE: Prompt user to deactivate (ngừng sử dụng) to preserve history
+              useModalStore.getState().showModal({
+                title: "Ngừng sử dụng nhà cung cấp?",
+                message: `Nhà cung cấp "${sup.Name}" đã có dữ liệu nhập hàng hoặc chứng từ liên kết nên không thể xóa hoàn toàn. Nhà cung cấp sẽ được ẩn khỏi các giao dịch mới, còn lịch sử cũ vẫn được giữ nguyên.`,
+                type: "confirm",
+                destructive: true,
+                confirmText: "Ngừng sử dụng",
+                cancelText: "Hủy",
+                onConfirm: async () => {
+                  try {
+                    useModalStore.getState().setLoading(true);
+                    await apiClient.put(`/Suppliers/${sup.Id}/deactivate`, { reason: "Ngừng sử dụng theo yêu cầu quản trị" });
+                    await db.runAsync(
+                      "UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = 'Synced', SyncAction = 'DEACTIVATE', UpdatedAt = ? WHERE Id = ?",
+                      [new Date().toISOString(), sup.Id]
+                    );
+                    invalidateSupplier();
+                    await loadData();
+                    useModalStore.getState().showModal({
+                      title: "Thành công",
+                      message: `Đã ngừng sử dụng nhà cung cấp "${sup.Name}".`,
+                      type: "success"
+                    });
+                  } catch (deactErr: any) {
+                    const isDeactNetErr = !deactErr.response || deactErr.code === 'ERR_NETWORK';
+                    if (isDeactNetErr) {
+                      await db.runAsync(
+                        "UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = 'PendingDelete', SyncAction = 'DEACTIVATE', UpdatedAt = ? WHERE Id = ?",
+                        [new Date().toISOString(), sup.Id]
+                      );
+                      invalidateSupplier();
+                      await loadData();
+                      useModalStore.getState().showModal({
+                        title: "Đã lưu thay đổi trên thiết bị",
+                        message: `Yêu cầu ngừng sử dụng nhà cung cấp "${sup.Name}" đã được lưu trên thiết bị và sẽ tự động đồng bộ khi có mạng.`,
+                        type: "success"
+                      });
+                    } else {
+                      useModalStore.getState().showModal({
+                        title: "Lỗi",
+                        message: deactErr.response?.data?.message || "Không thể ngừng sử dụng nhà cung cấp.",
+                        type: "error"
+                      });
+                    }
+                  } finally {
+                    useModalStore.getState().setLoading(false);
+                  }
+                }
+              });
+              return;
+            }
+
+            // Other server error
+            const apiError = parseApiError(apiErr);
+            useModalStore.getState().showModal({
+              title: apiError.title || "Lỗi",
+              message: apiError.message || "Không thể xóa nhà cung cấp.",
+              type: "error"
+            });
+          }
+        } finally {
+          useModalStore.getState().setLoading(false);
+          isDeletingRef.current = false;
         }
       }
     });
@@ -268,10 +344,23 @@ export default function SuppliersTab() {
               <View className="flex-row">
                 {canManageSuppliers && (
                   <>
-                    <TouchableOpacity onPress={() => handleOpenEdit(item)} className="bg-white border-2 border-black h-8 w-8 items-center justify-center mr-2">
+                    <TouchableOpacity
+                      testID={`edit-supplier-${item.Id}`}
+                      accessibilityLabel={`Sửa nhà cung cấp ${item.Name}`}
+                      accessibilityRole="button"
+                      onPress={() => handleOpenEdit(item)}
+                      className="bg-white border-2 border-black h-8 w-8 items-center justify-center mr-2"
+                    >
                       <Ionicons name="pencil" size={14} color="#000" />
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => handleDeleteSupplier(item)} className="bg-black h-8 w-8 items-center justify-center">
+                    <TouchableOpacity
+                      testID={`delete-supplier-${item.Id}`}
+                      accessibilityLabel={`Xóa nhà cung cấp ${item.Name}`}
+                      accessibilityRole="button"
+                      disabled={isLoading}
+                      onPress={() => handleDeleteSupplier(item)}
+                      className={`bg-black h-8 w-8 items-center justify-center ${isLoading ? 'opacity-50' : ''}`}
+                    >
                       <Ionicons name="trash-outline" size={14} color="#fff" />
                     </TouchableOpacity>
                   </>
@@ -313,11 +402,16 @@ export default function SuppliersTab() {
           className="absolute right-6 w-14 h-14 bg-black border-2 border-black items-center justify-center"
           style={{
             bottom: 85,
-            shadowColor: "#000",
-            shadowOffset: { width: 4, height: 4 },
-            shadowOpacity: 1,
-            shadowRadius: 0,
-            elevation: 5
+            ...Platform.select({
+              web: { boxShadow: "4px 4px 0px #000" } as any,
+              default: {
+                shadowColor: "#000",
+                shadowOffset: { width: 4, height: 4 },
+                shadowOpacity: 1,
+                shadowRadius: 0,
+                elevation: 5
+              }
+            })
           }}
         >
           <Ionicons name="add" size={28} color="#fff" />

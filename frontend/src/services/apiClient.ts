@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { useAuthStore } from "@/store/authStore";
+import { isDemoUser } from "@/utils/roleUtils";
 import {
   getAccessToken,
   getRefreshToken,
@@ -8,61 +9,10 @@ import {
 } from "@/utils/token";
 import axios, { AxiosError } from "axios";
 
-function resolveAndValidateApiUrl(): string {
-  let url = (process.env.EXPO_PUBLIC_API_URL || '').trim();
+import { API_BASE_URL } from "@/config/apiConfig";
+import { logger } from "@/utils/logger";
 
-  if (!url) {
-    const errorMsg = "[API Config] LỖI CẤU HÌNH: EXPO_PUBLIC_API_URL chưa được thiết lập trong biến môi trường (.env)!";
-    console.error(errorMsg);
-    if (!__DEV__) {
-      throw new Error(errorMsg);
-    }
-    return '';
-  }
-
-  try {
-    const urlObj = new URL(url);
-
-    // Normalize trailing slash
-    url = url.replace(/\/+$/, '');
-
-    if (!__DEV__) {
-      // In production, enforce HTTPS and disallow localhost / loopback
-      if (urlObj.protocol !== 'https:') {
-        throw new Error('[API Config] EXPO_PUBLIC_API_URL phải sử dụng giao thức HTTPS trong môi trường production');
-      }
-      if (urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1') {
-        throw new Error('[API Config] Không được sử dụng localhost làm API_URL trong môi trường production');
-      }
-    } else {
-      // In development, validate platform-specific network constraints
-      const isLocalhost = urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1';
-      const isLanIp = /^192\.168\.\d+\.\d+$/.test(urlObj.hostname) || /^10\.\d+\.\d+\.\d+$/.test(urlObj.hostname);
-
-      if (urlObj.protocol === 'http:' && !isLocalhost && !isLanIp) {
-        console.warn(`[API] Cảnh báo: HTTP đang được sử dụng cho địa chỉ non-local (${urlObj.hostname}).`);
-      }
-
-      if (isLocalhost) {
-        if (Platform.OS === 'android') {
-          console.warn('[API Config Warning] Đang trỏ tới localhost trên Android. Trình giả lập Android cần dùng 10.0.2.2 hoặc IP mạng nội bộ của máy tính.');
-        } else if (Platform.OS === 'ios' && !Platform.isPad && !Platform.isTV) {
-          console.warn('[API Config Warning] Đang trỏ tới localhost trên thiết bị iOS. Thiết bị thật cần dùng IP mạng nội bộ của máy tính.');
-        }
-      }
-    }
-  } catch (error: any) {
-    console.error("[API Config] Cấu hình API_URL không hợp lệ:", error.message || error);
-  }
-
-  return url;
-}
-
-const API_BASE_URL = resolveAndValidateApiUrl();
-
-if (__DEV__) {
-  console.log(`[API] Khởi tạo apiClient với baseURL: ${API_BASE_URL || '(chưa thiết lập)'}`);
-}
+logger.info("apiClient", `Khởi tạo apiClient với baseURL: ${API_BASE_URL || '(chưa thiết lập)'}`);
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -93,7 +43,10 @@ apiClient.interceptors.request.use(
       const configError = new Error('LỖI CẤU HÌNH HỆ THỐNG: Địa chỉ máy chủ (EXPO_PUBLIC_API_URL) chưa được thiết lập. Vui lòng kiểm tra file .env');
       return Promise.reject(configError);
     }
-    const isAuthEndpoint = config.url?.includes('/Auth/login') || config.url?.includes('/Auth/refresh-token');
+    const isAuthEndpoint =
+      config.url?.includes('/Auth/login') ||
+      config.url?.includes('/Auth/refresh-token') ||
+      config.url?.includes('/Auth/demo-login');
     if (!isAuthEndpoint) {
       const token = await getAccessToken();
       if (token) {
@@ -117,8 +70,13 @@ apiClient.interceptors.response.use(
 
     if (!originalRequest) return Promise.reject(error);
 
-    // 401 Refresh Token Logic (Single-flight)
-    if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url?.includes('/Auth/login')) {
+    const isAuthEndpoint =
+      originalRequest.url?.includes('/Auth/login') ||
+      originalRequest.url?.includes('/Auth/refresh-token') ||
+      originalRequest.url?.includes('/Auth/demo-login');
+
+    // 401 Refresh Token / Demo Token Logic (Single-flight)
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       if (isRefreshing) {
         return new Promise(function(resolve, reject) {
           failedQueue.push({ resolve, reject });
@@ -133,6 +91,38 @@ apiClient.interceptors.response.use(
       originalRequest._retry = true;
       isRefreshing = true;
 
+      const currentUser = useAuthStore.getState().user;
+      const isDemo = isDemoUser(currentUser) || currentUser?.isDemo;
+
+      if (isDemo) {
+        try {
+          logger.debug("Auth", "Phiên trải nghiệm hết hạn (401), đang tự động làm mới...");
+          const demoResponse = await axios.post(`${API_BASE_URL}/Auth/demo-login`);
+          const data = demoResponse.data?.data;
+          const newAccessToken = data?.accessToken;
+
+          if (!newAccessToken) {
+            throw new Error("Không nhận được token từ /Auth/demo-login");
+          }
+
+          await saveTokens(newAccessToken, '');
+          useAuthStore.getState().setToken(newAccessToken);
+
+          processQueue(null, newAccessToken);
+          originalRequest.headers['Authorization'] = 'Bearer ' + newAccessToken;
+          return apiClient(originalRequest);
+        } catch (demoErr: any) {
+          logger.warn("Auth", "Làm mới phiên trải nghiệm thất bại sau 401:", demoErr?.message);
+          processQueue(demoErr, null);
+          await clearTokens();
+          useAuthStore.getState().setToken(null);
+          return Promise.reject(demoErr);
+        } finally {
+          isRefreshing = false;
+        }
+      }
+
+      // Regular user token refresh
       try {
         const accessToken = await getAccessToken();
         const refreshToken = await getRefreshToken();
@@ -177,7 +167,7 @@ apiClient.interceptors.response.use(
 
       if (originalRequest._retryCount < maxRetries) {
         originalRequest._retryCount += 1;
-        
+
         let delay = 1000 * Math.pow(2, originalRequest._retryCount); // Exponential backoff
 
         // Respect Retry-After header if present

@@ -50,13 +50,13 @@ namespace POS_WMS.WebApi.Controllers
             {
                 return NotFound(ApiResponse<bool>.Failure(ex.Message));
             }
-            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
+            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
             {
-                return Conflict(ApiResponse<bool>.Failure(ex.Message));
+                return Conflict(ApiResponse<bool>.Failure("Không thể đồng bộ dữ liệu. Dữ liệu trên hệ thống đã được cập nhật từ thiết bị khác. Vui lòng tải lại trước khi tiếp tục.", "DATA_CONCURRENT_UPDATE"));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
+                return StatusCode(500, ApiResponse<bool>.Failure("Hệ thống gặp sự cố khi điều chỉnh tồn kho. Vui lòng thử lại sau."));
             }
         }
 
@@ -77,13 +77,13 @@ namespace POS_WMS.WebApi.Controllers
             {
                 return BadRequest(ApiResponse<bool>.Failure(ex.Message));
             }
-            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
+            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
             {
-                return Conflict(ApiResponse<bool>.Failure($"Xung đột đồng thời (RowVersion đã thay đổi): {ex.Message}"));
+                return Conflict(ApiResponse<bool>.Failure("Không thể đồng bộ dữ liệu. Dữ liệu trên hệ thống đã được cập nhật từ thiết bị khác. Vui lòng tải lại trước khi tiếp tục.", "DATA_CONCURRENT_UPDATE"));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
+                return StatusCode(500, ApiResponse<bool>.Failure("Hệ thống gặp sự cố khi đồng bộ điều chỉnh tồn kho. Vui lòng thử lại sau."));
             }
         }
     }

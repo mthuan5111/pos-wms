@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Modal, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, ScrollView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useDemoSandboxStore } from '@/store/useDemoSandboxStore';
 import { useNavigation } from '@react-navigation/native';
@@ -43,7 +43,7 @@ const GUIDE_ITEMS: GuideItem[] = [
   {
     id: 'receipt',
     title: '4. Thử lập phiếu nhập kho',
-    desc: 'Lập phiếu nhập hàng mô phỏng từ nhà cung cấp với giá mô phỏng, tăng tồn kho trong phạm vi sandbox.',
+    desc: 'Lập phiếu nhập hàng mô phỏng từ nhà cung cấp với giá mô phỏng, tăng tồn kho trong phạm vi thử nghiệm.',
     route: 'Inventory',
     tabParam: { tab: 'receipts' },
     icon: 'cube-outline',
@@ -59,14 +59,14 @@ const GUIDE_ITEMS: GuideItem[] = [
   {
     id: 'invoice',
     title: '6. Xem hóa đơn và in ấn',
-    desc: 'Xem lại danh sách hóa đơn bán hàng showcase và hóa đơn thử nghiệm, xem trước bản in nhiệt 80mm/58mm.',
+    desc: 'Xem lại danh sách hóa đơn bán hàng và hóa đơn thử nghiệm',
     route: 'Invoice',
     icon: 'receipt-outline',
   },
   {
     id: 'offline',
     title: '7. Trải nghiệm Offline-first',
-    desc: 'Tạo đơn hàng khi mất mạng, dữ liệu lưu an toàn vào SQLite/OPFS và mô phỏng đồng bộ khi có mạng.',
+    desc: 'Tạo đơn hàng khi mất mạng, dữ liệu lưu an toàn vào SQLite và mô phỏng đồng bộ khi có mạng.',
     route: 'POS',
     icon: 'cloud-offline-outline',
   },
@@ -114,11 +114,16 @@ export default function DemoExperienceGuideModal({ visible, onClose }: DemoExper
             maxWidth: 620,
             maxHeight: '90%',
             padding: 22,
-            shadowColor: '#000',
-            shadowOffset: { width: 4, height: 4 },
-            shadowOpacity: 1,
-            shadowRadius: 0,
-            elevation: 8,
+            ...Platform.select({
+              web: { boxShadow: '4px 4px 0px #000' } as any,
+              default: {
+                shadowColor: '#000',
+                shadowOffset: { width: 4, height: 4 },
+                shadowOpacity: 1,
+                shadowRadius: 0,
+                elevation: 8,
+              }
+            })
           }}
         >
           {/* Header */}
@@ -128,15 +133,15 @@ export default function DemoExperienceGuideModal({ visible, onClose }: DemoExper
                 <Ionicons name="compass-outline" size={18} color="#fff" />
               </View>
               <View>
-                <Text className="font-serif text-lg font-black text-black uppercase tracking-tight">
-                  Bắt đầu trải nghiệm POS-WMS
+                <Text className="text-base sm:text-lg font-black text-black uppercase tracking-tight">
+                  Bắt đầu trải nghiệm POS & WMS
                 </Text>
                 <Text className="text-[11px] font-bold text-gray-500 uppercase">
                   Tiến độ: {completedCount}/{GUIDE_ITEMS.length} chức năng đã thử
                 </Text>
               </View>
             </View>
-            <TouchableOpacity onPress={onClose} className="p-1">
+            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Đóng hướng dẫn" className="p-1">
               <Ionicons name="close" size={24} color="#000" />
             </TouchableOpacity>
           </View>
@@ -145,7 +150,7 @@ export default function DemoExperienceGuideModal({ visible, onClose }: DemoExper
           <View className="my-3 bg-blue-50 border border-blue-300 p-2.5 flex-row items-center">
             <Ionicons name="shield-checkmark-outline" size={16} color="#0284c7" style={{ marginRight: 8 }} />
             <Text className="text-[11px] text-blue-900 flex-1 leading-4 font-medium">
-              Bạn có thể trải nghiệm các tính năng theo thứ tự tùy ý. Mọi thay đổi đều được cách ly hoàn toàn trong Demo Sandbox.
+              Bạn có thể tự do thử nghiệm các chức năng theo thứ tự tùy ý. Mọi dữ liệu đều được cách ly an toàn trong không gian trải nghiệm.
             </Text>
           </View>
 
@@ -156,16 +161,14 @@ export default function DemoExperienceGuideModal({ visible, onClose }: DemoExper
               return (
                 <View
                   key={item.id}
-                  className={`p-3.5 mb-2.5 border-2 ${
-                    isDone ? 'border-green-600 bg-green-50/50' : 'border-black bg-white'
-                  }`}
+                  className={`p-3.5 mb-2.5 border-2 ${isDone ? 'border-green-600 bg-green-50/50' : 'border-black bg-white'
+                    }`}
                 >
                   <View className="flex-row items-start justify-between gap-2">
                     <View className="flex-row items-center flex-1 mr-2">
                       <View
-                        className={`w-7 h-7 rounded border items-center justify-center mr-2.5 ${
-                          isDone ? 'bg-green-600 border-green-600' : 'bg-gray-100 border-black'
-                        }`}
+                        className={`w-7 h-7 rounded border items-center justify-center mr-2.5 ${isDone ? 'bg-green-600 border-green-600' : 'bg-gray-100 border-black'
+                          }`}
                       >
                         <Ionicons
                           name={isDone ? 'checkmark' : item.icon}
@@ -186,14 +189,12 @@ export default function DemoExperienceGuideModal({ visible, onClose }: DemoExper
                     <TouchableOpacity
                       testID={`guide-btn-${item.id}`}
                       onPress={() => handleNavigate(item)}
-                      className={`px-3 py-1.5 border border-black ${
-                        isDone ? 'bg-white' : 'bg-black'
-                      }`}
+                      className={`px-3 py-1.5 border border-black ${isDone ? 'bg-white' : 'bg-black'
+                        }`}
                     >
                       <Text
-                        className={`text-[10px] font-bold uppercase tracking-wider ${
-                          isDone ? 'text-black' : 'text-white'
-                        }`}
+                        className={`text-[10px] font-bold uppercase tracking-wider ${isDone ? 'text-black' : 'text-white'
+                          }`}
                       >
                         {isDone ? 'Xem lại' : 'Thử ngay'}
                       </Text>

@@ -171,13 +171,13 @@ namespace POS_WMS.WebApi.Controllers
 
                 return Ok(ApiResponse<int>.Success(supplier.Id, "Thêm nhà cung cấp thành công"));
             }
-            catch (DbUpdateException dbEx)
+            catch (DbUpdateException)
             {
-                return StatusCode(409, ApiResponse<int>.Failure($"Xung đột dữ liệu nhà cung cấp: {dbEx.InnerException?.Message ?? dbEx.Message}", "SUPPLIER_CONFLICT"));
+                return StatusCode(409, ApiResponse<int>.Failure("Không thể lưu nhà cung cấp do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "SUPPLIER_CONFLICT"));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, ApiResponse<int>.Failure($"Lỗi: {ex.Message}", "ERR_CREATE_SUPPLIER"));
+                return StatusCode(500, ApiResponse<int>.Failure("Hệ thống gặp sự cố khi tạo nhà cung cấp. Vui lòng thử lại sau.", "ERR_CREATE_SUPPLIER"));
             }
         }
 
@@ -245,13 +245,13 @@ namespace POS_WMS.WebApi.Controllers
 
                 return Ok(ApiResponse<bool>.Success(true, "Cập nhật thành công"));
             }
-            catch (DbUpdateException dbEx)
+            catch (DbUpdateException)
             {
-                return StatusCode(409, ApiResponse<bool>.Failure($"Xung đột dữ liệu nhà cung cấp: {dbEx.InnerException?.Message ?? dbEx.Message}", "SUPPLIER_CONFLICT"));
+                return StatusCode(409, ApiResponse<bool>.Failure("Không thể lưu nhà cung cấp do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "SUPPLIER_CONFLICT"));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi: {ex.Message}", "ERR_UPDATE_SUPPLIER"));
+                return StatusCode(500, ApiResponse<bool>.Failure("Hệ thống gặp sự cố khi cập nhật nhà cung cấp. Vui lòng thử lại sau.", "ERR_UPDATE_SUPPLIER"));
             }
         }
 
@@ -265,8 +265,12 @@ namespace POS_WMS.WebApi.Controllers
                 if (supplier == null)
                     return NotFound(ApiResponse<bool>.Failure("Không tìm thấy nhà cung cấp", "ERR_NOT_FOUND"));
 
-                if (string.IsNullOrWhiteSpace(request?.Reason))
-                    return BadRequest(ApiResponse<bool>.Failure("Vui lòng nhập lý do ngừng sử dụng.", "REASON_REQUIRED"));
+                if (!supplier.IsActive)
+                    return Ok(ApiResponse<bool>.Success(true, "Nhà cung cấp đã ở trạng thái ngừng sử dụng"));
+
+                var reason = string.IsNullOrWhiteSpace(request?.Reason)
+                    ? "Ngừng sử dụng theo yêu cầu quản trị"
+                    : request.Reason.Trim();
 
                 int.TryParse(User?.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var adminId);
                 var adminName = User?.FindFirst(ClaimTypes.Name)?.Value ?? "Unknown";
@@ -274,7 +278,7 @@ namespace POS_WMS.WebApi.Controllers
                 supplier.IsActive = false;
                 supplier.DeactivatedAt = DateTime.UtcNow;
                 supplier.DeactivatedByUserId = adminId;
-                supplier.DeactivationReason = request.Reason.Trim();
+                supplier.DeactivationReason = reason;
 
                 _supplierRepository.Update(supplier);
                 await _unitOfWork.SaveChangesAsync();
@@ -341,19 +345,21 @@ namespace POS_WMS.WebApi.Controllers
                 var supplier = await _supplierRepository.GetByIdAsync(id);
                 if (supplier == null)
                 {
-                    return NotFound(ApiResponse<bool>.Failure("Không tìm thấy nhà cung cấp", "ERR_NOT_FOUND"));
+                    // Idempotent: record is already deleted or not found
+                    return Ok(ApiResponse<bool>.Success(true, "Nhà cung cấp không tồn tại hoặc đã được xóa trước đó."));
                 }
 
-                var allReceipts = await _goodsReceiptRepository.GetAllAsync();
-                if (allReceipts.Any(r => r.SupplierId == id))
+                // Check dependencies directly and asynchronously without loading entire tables into memory
+                var hasReceipts = await _context.GoodsReceipts.AnyAsync(r => r.SupplierId == id);
+                if (hasReceipts)
                 {
-                    return StatusCode(409, ApiResponse<bool>.Failure("Không thể xóa nhà cung cấp vì đã phát sinh phiếu nhập kho. Vui lòng sử dụng tính năng Ngừng sử dụng.", "ERR_SUPPLIER_IN_USE"));
+                    return StatusCode(409, ApiResponse<bool>.Failure("Không thể xóa nhà cung cấp vì đã phát sinh phiếu nhập kho. Vui lòng chuyển sang trạng thái Ngừng sử dụng để bảo toàn dữ liệu lịch sử.", "ERR_SUPPLIER_IN_USE"));
                 }
 
-                var allProducts = await _productRepository.GetAllAsync();
-                if (allProducts.Any(p => p.SupplierId == id))
+                var hasProducts = await _context.Products.AnyAsync(p => p.SupplierId == id);
+                if (hasProducts)
                 {
-                    return StatusCode(409, ApiResponse<bool>.Failure("Không thể xóa nhà cung cấp đang được gán cho sản phẩm. Vui lòng chuyển sản phẩm sang nhà cung cấp khác hoặc sử dụng tính năng Ngừng sử dụng.", "ERR_SUPPLIER_IN_USE"));
+                    return StatusCode(409, ApiResponse<bool>.Failure("Không thể xóa nhà cung cấp đang được gán cho sản phẩm. Vui lòng chuyển sản phẩm sang nhà cung cấp khác hoặc chuyển sang trạng thái Ngừng sử dụng.", "ERR_SUPPLIER_IN_USE"));
                 }
 
                 _supplierRepository.Delete(supplier);
@@ -361,7 +367,7 @@ namespace POS_WMS.WebApi.Controllers
 
                 int.TryParse(User?.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var adminId);
                 var adminName = User?.FindFirst(ClaimTypes.Name)?.Value ?? "Unknown";
-                await _auditLogService.LogActionAsync(adminId, adminName, "SUPPLIER_DEACTIVATED", "Supplier", id.ToString(), $"Xóa nhà cung cấp: {supplier.Name} bởi {adminName}", "SUCCESS");
+                await _auditLogService.LogActionAsync(adminId, adminName, "SUPPLIER_DELETED", "Supplier", id.ToString(), $"Xóa nhà cung cấp: {supplier.Name} bởi {adminName}", "SUCCESS");
 
                 return Ok(ApiResponse<bool>.Success(true, "Xóa nhà cung cấp thành công"));
             }
