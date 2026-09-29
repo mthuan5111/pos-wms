@@ -229,11 +229,13 @@ namespace POS_WMS.WebApi.Controllers
             }
             catch (DbUpdateException dbEx)
             {
-                return Conflict(ApiResponse<int>.Failure($"Xung đột dữ liệu sản phẩm: {dbEx.InnerException?.Message ?? dbEx.Message}", "PRODUCT_CONFLICT"));
+                _logger.LogError(dbEx, "Lỗi cập nhật CSDL khi tạo sản phẩm");
+                return Conflict(ApiResponse<int>.Failure("Không thể lưu sản phẩm do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "PRODUCT_CONFLICT"));
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<int>.Failure($"Lỗi hệ thống: {ex.Message}", "ERR_CREATE"));
+                _logger.LogError(ex, "Lỗi khi tạo sản phẩm");
+                return StatusCode(500, ApiResponse<int>.Failure("Hệ thống gặp sự cố khi tạo sản phẩm. Vui lòng thử lại sau.", "ERR_CREATE"));
             }
         }
 
@@ -334,11 +336,13 @@ namespace POS_WMS.WebApi.Controllers
             }
             catch (DbUpdateException dbEx)
             {
-                return Conflict(ApiResponse<bool>.Failure($"Xung đột cập nhật dữ liệu: {dbEx.InnerException?.Message ?? dbEx.Message}", "PRODUCT_CONFLICT"));
+                _logger.LogError(dbEx, "Lỗi cập nhật CSDL khi sửa sản phẩm");
+                return Conflict(ApiResponse<bool>.Failure("Không thể lưu sản phẩm do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "PRODUCT_CONFLICT"));
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
+                _logger.LogError(ex, "Lỗi khi cập nhật sản phẩm");
+                return StatusCode(500, ApiResponse<bool>.Failure("Hệ thống gặp sự cố khi cập nhật sản phẩm. Vui lòng thử lại sau."));
             }
         }
 
@@ -392,7 +396,7 @@ namespace POS_WMS.WebApi.Controllers
                 var barcodeExists = await _context.Products.AnyAsync(p => p.Barcode == product.Barcode && p.Id != id);
                 if (barcodeExists)
                 {
-                    return Conflict(ApiResponse<bool>.Failure("Không thể kích hoạt lại: Mã vạch đã bị xung đột với sản phẩm khác.", "PRODUCT_BARCODE_ALREADY_EXISTS"));
+                    return Conflict(ApiResponse<bool>.Failure("Không thể kích hoạt lại: Mã vạch đã được sử dụng bởi sản phẩm khác.", "PRODUCT_BARCODE_ALREADY_EXISTS"));
                 }
 
                 var nameExists = await _context.Products.AnyAsync(p => p.NormalizedName == product.NormalizedName && p.CategoryId == product.CategoryId && p.Id != id);

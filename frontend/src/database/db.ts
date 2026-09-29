@@ -32,6 +32,14 @@ export interface LocalSupplierRow {
   ContactPerson: string;
   Phone: string;
   Address: string;
+  IsActive?: number;
+  IsDeleted?: number;
+  UpdatedAt?: string;
+  SyncStatus?: string;
+  SyncAction?: string;
+  SyncError?: string;
+  RetryCount?: number;
+  NextRetryAt?: string;
 }
 
 export interface LocalCustomerRow {
@@ -371,13 +379,26 @@ export const applyBootstrapSnapshotAsync = async (
         for (const s of snap.suppliers) {
           const isTombstone = s.isActive === false || s.IsActive === false;
           if (isTombstone) {
-            await db.runAsync("UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1 WHERE Id = ?", [s.id || s.Id]);
+            await db.runAsync(
+              "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted, SyncStatus) VALUES (?, ?, ?, ?, ?, 0, 1, 'Synced')",
+              [s.id || s.Id, s.name || s.Name, s.contactPerson || s.ContactPerson || "", s.phone || s.Phone || "", s.address || s.Address || ""]
+            );
           } else {
             await db.runAsync(
-              "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, 1, 0)",
+              "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted, SyncStatus) VALUES (?, ?, ?, ?, ?, 1, 0, 'Synced')",
               [s.id || s.Id, s.name || s.Name, s.contactPerson || s.ContactPerson || "", s.phone || s.Phone || "", s.address || s.Address || ""]
             );
           }
+        }
+
+        // Mark local suppliers NOT present in server snapshot as deleted (unless pending local creation)
+        const serverSupplierIds = snap.suppliers.map((s: any) => s.id || s.Id).filter(Boolean);
+        if (serverSupplierIds.length > 0) {
+          const placeholders = serverSupplierIds.map(() => '?').join(',');
+          await db.runAsync(
+            `UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = 'Synced' WHERE Id NOT IN (${placeholders}) AND (SyncStatus IS NULL OR SyncStatus = 'Synced')`,
+            serverSupplierIds
+          );
         }
       }
 
@@ -680,10 +701,10 @@ export const pullIncrementalChangesAsync = async (
             const sId = entityData.id || entityData.Id;
             const isTombstone = operation === "Delete" || entityData.isActive === false || entityData.IsActive === false;
             if (isTombstone) {
-              await db.runAsync("UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1 WHERE Id = ?", [sId]);
+              await db.runAsync("UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = 'Synced' WHERE Id = ?", [sId]);
             } else {
               await db.runAsync(
-                "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted) VALUES (?, ?, ?, ?, ?, 1, 0)",
+                "INSERT OR REPLACE INTO LocalSuppliers (Id, Name, ContactPerson, Phone, Address, IsActive, IsDeleted, SyncStatus) VALUES (?, ?, ?, ?, ?, 1, 0, 'Synced')",
                 [sId, entityData.name || entityData.Name, entityData.contactPerson || entityData.ContactPerson || "", entityData.phone || entityData.Phone || "", entityData.address || entityData.Address || ""]
               );
             }
@@ -868,6 +889,37 @@ export const getLocalCategories = async () => {
   } catch (error) {
     console.error("Lỗi khi lấy danh mục local:", error);
     return [];
+  }
+};
+
+export const getActiveLocalSuppliers = async (): Promise<LocalSupplierRow[]> => {
+  try {
+    const db = await getDBConnection();
+    return await db.getAllAsync<LocalSupplierRow>(
+      "SELECT * FROM LocalSuppliers WHERE (IsDeleted = 0 OR IsDeleted IS NULL) AND (IsActive = 1 OR IsActive IS NULL) ORDER BY Name ASC"
+    );
+  } catch (error) {
+    console.error("Lỗi khi lấy danh sách nhà cung cấp:", error);
+    return [];
+  }
+};
+
+export const softDeleteOrDeactivateLocalSupplier = async (
+  id: number,
+  action: 'DELETE' | 'DEACTIVATE',
+  isOnline: boolean
+): Promise<void> => {
+  try {
+    const db = await getDBConnection();
+    const syncStatus = isOnline ? 'Synced' : 'PendingDelete';
+    const nowIso = new Date().toISOString();
+    await db.runAsync(
+      "UPDATE LocalSuppliers SET IsActive = 0, IsDeleted = 1, SyncStatus = ?, SyncAction = ?, UpdatedAt = ? WHERE Id = ?",
+      [syncStatus, action, nowIso, id]
+    );
+  } catch (error) {
+    console.error("Lỗi khi cập nhật trạng thái xóa nhà cung cấp local:", error);
+    throw error;
   }
 };
 

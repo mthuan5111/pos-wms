@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useDemoSandboxStore } from '@/store/useDemoSandboxStore';
 import { useModalStore } from '@/store/useModalStore';
@@ -23,7 +23,7 @@ export default function DemoResetConfirmModal({ visible, onClose }: DemoResetCon
       onClose();
       showModal({
         title: 'Làm mới thành công',
-        message: 'Dữ liệu sandbox của phiên trải nghiệm hiện tại đã được dọn sạch. Toàn bộ master data và dữ liệu showcase chính vẫn được giữ nguyên an toàn.',
+        message: 'Dữ liệu của phiên trải nghiệm hiện tại đã được dọn sạch.',
         type: 'success',
       });
     } catch (e: any) {
@@ -63,11 +63,16 @@ export default function DemoResetConfirmModal({ visible, onClose }: DemoResetCon
             width: '100%',
             maxWidth: 480,
             padding: 24,
-            shadowColor: '#000',
-            shadowOffset: { width: 4, height: 4 },
-            shadowOpacity: 1,
-            shadowRadius: 0,
-            elevation: 8,
+            ...Platform.select({
+              web: { boxShadow: '4px 4px 0px #000' } as any,
+              default: {
+                shadowColor: '#000',
+                shadowOffset: { width: 4, height: 4 },
+                shadowOpacity: 1,
+                shadowRadius: 0,
+                elevation: 8,
+              }
+            })
           }}
         >
           {/* Header */}
@@ -76,11 +81,11 @@ export default function DemoResetConfirmModal({ visible, onClose }: DemoResetCon
               <Ionicons name="refresh" size={22} color="#b45309" />
             </View>
             <View className="flex-1">
-              <Text className="font-serif text-lg font-black text-black uppercase">
+              <Text className="text-base sm:text-lg font-black text-black uppercase tracking-tight">
                 Làm mới phiên trải nghiệm
               </Text>
-              <Text className="text-[11px] font-mono text-gray-500">
-                Session: {demoSessionId.substring(0, 16)}...
+              <Text className="text-[11px] text-gray-600">
+                Khôi phục về trạng thái thử nghiệm ban đầu
               </Text>
             </View>
           </View>
@@ -89,14 +94,14 @@ export default function DemoResetConfirmModal({ visible, onClose }: DemoResetCon
 
           {/* Description */}
           <Text className="text-xs text-gray-800 leading-5 mb-3 font-medium">
-            Hành động này sẽ <Text className="font-bold text-red-600">xóa toàn bộ dữ liệu thử nghiệm</Text> do chính phiên trình duyệt hiện tại tạo ra, bao gồm:
+            Hành động này sẽ <Text className="font-bold text-red-700">xóa dữ liệu thử nghiệm</Text> do phiên hiện tại tạo ra, bao gồm:
           </Text>
 
           <View className="bg-gray-50 border border-gray-300 p-3 mb-4 space-y-1.5">
-            <Text className="text-[11px] text-gray-700">• Các hóa đơn bán hàng thử (DEMO-ORDER-...)</Text>
-            <Text className="text-[11px] text-gray-700">• Các ca làm việc thử nghiệm (DEMO-SHIFT-...)</Text>
-            <Text className="text-[11px] text-gray-700">• Các phiếu nhập kho thử (DEMO-GR-...)</Text>
-            <Text className="text-[11px] text-gray-700">• Các điều chỉnh tồn kho thử trong sandbox</Text>
+            <Text className="text-[11px] text-gray-700">• Các hóa đơn bán hàng thử</Text>
+            <Text className="text-[11px] text-gray-700">• Các ca làm việc thử nghiệm</Text>
+            <Text className="text-[11px] text-gray-700">• Các phiếu nhập kho thử</Text>
+            <Text className="text-[11px] text-gray-700">• Các điều chỉnh tồn kho trong phiên</Text>
           </View>
 
           <View className="bg-green-50 border border-green-300 p-3 mb-5">
@@ -104,7 +109,7 @@ export default function DemoResetConfirmModal({ visible, onClose }: DemoResetCon
               ✓ CAM KẾT AN TOÀN:
             </Text>
             <Text className="text-[11px] text-green-800 mt-1">
-              Không xóa database SQL Server chính, không thay đổi số liệu doanh thu thực tế, không ảnh hưởng đến các phiên trải nghiệm khác.
+              Không xóa dữ liệu gốc của hệ thống, không thay đổi số liệu doanh thu thực tế và không ảnh hưởng đến các tài khoản khác.
             </Text>
           </View>
 

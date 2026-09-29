@@ -6,7 +6,7 @@ export interface SQLiteDatabaseAdapter {
   withTransactionAsync?(task: () => Promise<void>): Promise<void>;
 }
 
-export const TARGET_SCHEMA_VERSION = 8;
+export const TARGET_SCHEMA_VERSION = 9;
 export const TARGET_DATA_GENERATION = "20260922_GEN2";
 
 export async function safeAddColumn(
@@ -262,6 +262,11 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
     await safeAddColumn(db, "LocalSuppliers", "IsActive", "INTEGER DEFAULT 1");
     await safeAddColumn(db, "LocalSuppliers", "UpdatedAt", "TEXT");
     await safeAddColumn(db, "LocalSuppliers", "IsDeleted", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalSuppliers", "SyncStatus", "TEXT DEFAULT 'Synced'");
+    await safeAddColumn(db, "LocalSuppliers", "SyncAction", "TEXT");
+    await safeAddColumn(db, "LocalSuppliers", "SyncError", "TEXT");
+    await safeAddColumn(db, "LocalSuppliers", "RetryCount", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalSuppliers", "NextRetryAt", "TEXT");
 
     await safeAddColumn(db, "LocalProducts", "SupplierId", "INTEGER");
     await safeAddColumn(db, "LocalProducts", "LowStockThreshold", "INTEGER DEFAULT 10");

@@ -1,4 +1,5 @@
 import { Platform, Image as RNImage } from 'react-native';
+import { logger } from './logger';
 
 export interface ImageValidationResult {
   isValid: boolean;
@@ -41,7 +42,7 @@ export async function validatePickedImage(
     if (disallowedExtensions.includes(ext) || !ALLOWED_EXTENSIONS.includes(ext)) {
       return {
         isValid: false,
-        error: 'Định dạng ảnh không được hỗ trợ. Vui lòng chọn JPG, PNG hoặc WebP.',
+        error: 'Định dạng ảnh chưa được hỗ trợ. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.',
       };
     }
   }
@@ -52,7 +53,7 @@ export async function validatePickedImage(
     if (!ALLOWED_MIME_TYPES.includes(mime)) {
       return {
         isValid: false,
-        error: 'Định dạng ảnh không được hỗ trợ. Vui lòng chọn JPG, PNG hoặc WebP.',
+        error: 'Định dạng ảnh chưa được hỗ trợ. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.',
       };
     }
   }
@@ -68,7 +69,7 @@ export async function validatePickedImage(
     if (metadata.fileSize > MAX_FILE_SIZE) {
       return {
         isValid: false,
-        error: 'Ảnh vượt quá dung lượng cho phép (tối đa 5MB).',
+        error: `Ảnh vượt quá dung lượng cho phép (tối đa ${MAX_FILE_SIZE / (1024 * 1024)}MB).`,
       };
     }
   }
@@ -112,12 +113,12 @@ export async function validatePickedImage(
       if (!isJpeg && !isPng && !isWebp) {
         return {
           isValid: false,
-          error: 'Định dạng ảnh không được hỗ trợ. Vui lòng chọn JPG, PNG hoặc WebP.',
+          error: 'Định dạng ảnh chưa được hỗ trợ. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.',
         };
       }
     }
   } catch (err: any) {
-    console.warn('[ImageValidator] Error reading file bytes:', err);
+    logger.warn('ImageValidator', 'Lỗi khi đọc header file ảnh:', err?.message);
     // Proceed to decode check if fetch fails (e.g. some native blob schemes)
   }
 

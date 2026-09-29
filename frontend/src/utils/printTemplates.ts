@@ -330,8 +330,8 @@ export function generateSalesReceiptHtml(
     rawPm.toUpperCase().includes('QR')
       ? 'Chuyển khoản QR'
       : rawPm.toUpperCase().includes('CASH') || rawPm.includes('Tiền')
-      ? 'Tiền mặt'
-      : rawPm
+        ? 'Tiền mặt'
+        : rawPm
   );
 
   let rowsHtml = '';
@@ -391,7 +391,7 @@ export function generateSalesReceiptHtml(
   ` : '';
   const demoFooterHtml = isDemo ? `
     <div style="margin-top: 12px; padding-top: 6px; border-top: 1px dashed #000; text-align: center; font-weight: 700; font-size: 10px; text-transform: uppercase;">
-      DỮ LIỆU TRẢI NGHIỆM (DEMO SANDBOX) - KHÔNG PHẢI CHỨNG TỪ THỰC
+      DỮ LIỆU TRẢI NGHIỆM - KHÔNG PHẢI CHỨNG TỪ THỰC
     </div>
   ` : '';
 
@@ -518,7 +518,7 @@ export function generateGoodsReceiptHtml(
   ` : '';
   const demoFooterHtml = isDemo ? `
     <div style="margin-top: 16px; padding-top: 6px; border-top: 1px dashed #000; text-align: center; font-weight: 700; font-size: 10px; text-transform: uppercase;">
-      DỮ LIỆU TRẢI NGHIỆM (DEMO SANDBOX) - KHÔNG PHẢI CHỨNG TỪ THỰC
+      DỮ LIỆU TRẢI NGHIỆM - KHÔNG PHẢI CHỨNG TỪ THỰC
     </div>
   ` : '';
 
@@ -630,7 +630,7 @@ export function generateShiftReportHtml(
   ` : '';
   const demoFooterHtml = isDemo ? `
     <div style="margin-top: 16px; padding-top: 6px; border-top: 1px dashed #000; text-align: center; font-weight: 700; font-size: 10px; text-transform: uppercase;">
-      DỮ LIỆU TRẢI NGHIỆM (DEMO SANDBOX) - KHÔNG PHẢI CHỨNG TỪ THỰC
+      DỮ LIỆU TRẢI NGHIỆM - KHÔNG PHẢI CHỨNG TỪ THỰC
     </div>
   ` : '';
 

@@ -130,7 +130,7 @@ export default function SystemLogScreen() {
               Nhật ký hệ thống
             </Text>
             <Text className="mt-0.5 text-[10px] sm:text-[11px] tracking-widest text-neutral-600 uppercase">
-              Audit Logs (Lịch sử hoạt động)
+              Lịch sử hoạt động hệ thống
             </Text>
           </View>
         </View>
@@ -173,7 +173,7 @@ export default function SystemLogScreen() {
 
             <View className="flex-row items-center mb-2 flex-wrap">
               <Ionicons name="person" size={14} color="#000" />
-              <Text className="text-black font-bold ml-1 text-xs">User: {item.username || item.userName || "Hệ thống"}</Text>
+              <Text className="text-black font-bold ml-1 text-xs">Người thực hiện: {item.username || item.userName || "Hệ thống"}</Text>
               {item.entityName && (
                 <>
                   <Text className="mx-2 text-gray-400">|</Text>

@@ -4,10 +4,12 @@ import { getDBConnection, getLocalOrderDetails, pullIncrementalChangesAsync } fr
 import { syncOfflineOrder } from '@/services/orderApi';
 import { syncOfflineGoodsReceipt } from '@/services/goodsReceiptApi';
 import { syncStockAdjustment } from '@/services/productApi';
+import apiClient from '@/services/apiClient';
 import { classifySyncError } from '@/utils/errorParser';
 import { useAuthStore } from '@/store/authStore';
 import { useCacheInvalidationStore } from '@/store/useCacheInvalidationStore';
 import { isDemoUser } from '@/utils/roleUtils';
+import { logger } from '@/utils/logger';
 
 export interface SyncResult {
   status: 'success' | 'partialSuccess' | 'offline' | 'failed' | 'authenticationRequired';
@@ -31,10 +33,12 @@ interface SyncState {
   syncNow: (reason: string) => Promise<SyncResult>;
   refreshPendingCount: () => Promise<void>;
   requestSync: () => void;
-  queryPendingBreakdown: () => Promise<{ orders: number; receipts: number; errors: string[] }>;
+  queryPendingBreakdown: () => Promise<{ orders: number; receipts: number; suppliers?: number; errors: string[] }>;
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+let syncCycleCounter = 0;
 
 export const useGlobalSyncStore = create<SyncState>((set, get) => ({
   isSyncing: false,
@@ -62,8 +66,8 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
     }
     try {
       const db = await getDBConnection();
-      const countRow = await db.getFirstAsync<{c: number}>(
-        "SELECT (SELECT COUNT(*) FROM LocalOrders WHERE IsSynced = 0 AND OwnerUserId = ?) + (SELECT COUNT(*) FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?) + (SELECT COUNT(*) FROM LocalStockAdjustments WHERE IsSynced = 0 AND UserId = ?) as c",
+      const countRow = await db.getFirstAsync<{ c: number }>(
+        "SELECT (SELECT COUNT(*) FROM LocalOrders WHERE IsSynced = 0 AND OwnerUserId = ?) + (SELECT COUNT(*) FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?) + (SELECT COUNT(*) FROM LocalStockAdjustments WHERE IsSynced = 0 AND UserId = ?) + (SELECT COUNT(*) FROM LocalSuppliers WHERE SyncStatus = 'PendingDelete') as c",
         [user.id, user.id, user.id]
       );
       set({ pendingCount: countRow?.c || 0 });
@@ -74,18 +78,20 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
 
   queryPendingBreakdown: async () => {
     const user = useAuthStore.getState().user;
-    if (!user) return { orders: 0, receipts: 0, errors: [] };
+    if (!user) return { orders: 0, receipts: 0, suppliers: 0, errors: [] };
     const db = await getDBConnection();
-    const orders = await db.getAllAsync<{SyncError: string}>("SELECT SyncError FROM LocalOrders WHERE IsSynced = 0 AND OwnerUserId = ?", [user.id]);
-    const receipts = await db.getAllAsync<{SyncError: string}>("SELECT SyncError FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?", [user.id]);
+    const orders = await db.getAllAsync<{ SyncError: string }>("SELECT SyncError FROM LocalOrders WHERE IsSynced = 0 AND OwnerUserId = ?", [user.id]);
+    const receipts = await db.getAllAsync<{ SyncError: string }>("SELECT SyncError FROM LocalGoodsReceipts WHERE IsSynced = 0 AND UserId = ?", [user.id]);
+    const suppliers = await db.getAllAsync<{ SyncError: string }>("SELECT SyncError FROM LocalSuppliers WHERE SyncStatus = 'PendingDelete'");
 
-    const errors = [...orders.map(o => o.SyncError), ...receipts.map(r => r.SyncError)].filter(Boolean) as string[];
+    const errors = [...orders.map(o => o.SyncError), ...receipts.map(r => r.SyncError), ...suppliers.map(s => s.SyncError)].filter(Boolean) as string[];
     const uniqueErrors = Array.from(new Set(errors));
 
     return {
-       orders: orders.length,
-       receipts: receipts.length,
-       errors: uniqueErrors
+      orders: orders.length,
+      receipts: receipts.length,
+      suppliers: suppliers.length,
+      errors: uniqueErrors
     };
   },
 
@@ -97,36 +103,38 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
     }
 
     const promise = (async (): Promise<SyncResult> => {
+      const cycleId = ++syncCycleCounter;
       let finalResult: SyncResult = {
-          status: 'failed',
-          syncedOrderCount: 0,
-          syncedReceiptCount: 0,
-          pendingOrderCount: 0,
-          pendingReceiptCount: 0,
-          errors: []
+        status: 'failed',
+        syncedOrderCount: 0,
+        syncedReceiptCount: 0,
+        pendingOrderCount: 0,
+        pendingReceiptCount: 0,
+        errors: []
       };
 
       try {
         set({ isSyncing: true, syncStatus: "Đang kiểm tra kết nối...", rerunRequested: false });
 
-        console.log(`[Sync] start reason=${reason}`);
+        console.log(`[Sync #${cycleId}] start reason=${reason}`);
 
         const netInfo = await NetInfo.fetch();
         if (!netInfo.isConnected || netInfo.isInternetReachable === false) {
-          set({ syncStatus: "Không có mạng, hoãn đồng bộ." });
+          set({ syncStatus: "Không có mạng, hoãn đồng bộ.", rerunRequested: false });
           finalResult.status = 'offline';
           return finalResult;
         }
 
         const user = useAuthStore.getState().user;
         if (!user) {
-          set({ syncStatus: "Chưa đăng nhập." });
+          set({ syncStatus: "Chưa đăng nhập.", rerunRequested: false });
           finalResult.status = 'authenticationRequired';
           return finalResult;
         }
 
-        if (isDemoUser(user)) {
-          set({ syncStatus: "Chế độ trải nghiệm (Demo Sandbox) không đồng bộ lên backend chính." });
+        if (isDemoUser(user) || user?.isDemo) {
+          console.log(`[Sync #${cycleId}] Chế độ trải nghiệm không đồng bộ lên backend chính.`);
+          set({ syncStatus: "Chế độ trải nghiệm không đồng bộ lên backend chính.", rerunRequested: false });
           finalResult.status = 'success';
           return finalResult;
         }
@@ -175,62 +183,53 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
             const res = await syncOfflineGoodsReceipt(syncData);
 
             if (res.isSuccess || (res.message && res.message.includes("ALREADY_PROCESSED")) || (res.data && res.data > 0)) {
-               const serverId = res.data || null;
-               console.log(`[Sync] receipt success serverId=${serverId}`);
-               await db.runAsync(
-                 "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
-                 [serverId, receipt.OfflineReferenceId]
-               );
-               receiptSynced++;
+              const serverId = res.data || null;
+              console.log(`[Sync] receipt success serverId=${serverId}`);
+              await db.runAsync(
+                "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
+                [serverId, receipt.OfflineReferenceId]
+              );
+              receiptSynced++;
             } else {
-               throw new Error(res.message || "Unknown error");
+              throw new Error(res.message || "Unknown error");
             }
           } catch (e: any) {
-             console.error(`[Sync] Lỗi phiếu nhập ${receipt.OfflineReferenceId}:`, e.message);
-             if (e.response && e.response.status === 409 && e.response.data?.message?.includes("ALREADY_PROCESSED") && e.response.data?.data) {
-                 const serverId = e.response.data.data;
-                 console.log(`[Sync] receipt success serverId=${serverId}`);
-                 await db.runAsync(
-                   "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
-                   [serverId, receipt.OfflineReferenceId]
-                 );
-                 receiptSynced++;
-                 continue;
-             }
-             let safeError = e.message;
-             let incrementRetry = false;
-             let newStatus = 'RetryableError';
+            console.error(`[Sync] Lỗi phiếu nhập ${receipt.OfflineReferenceId}:`, e.message);
+            if (e.response && e.response.status === 409 && e.response.data?.message?.includes("ALREADY_PROCESSED") && e.response.data?.data) {
+              const serverId = e.response.data.data;
+              console.log(`[Sync] receipt success serverId=${serverId}`);
+              await db.runAsync(
+                "UPDATE LocalGoodsReceipts SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
+                [serverId, receipt.OfflineReferenceId]
+              );
+              receiptSynced++;
+              continue;
+            }
+            let safeError = e.message || "Dữ liệu chưa được đồng bộ.";
+            let incrementRetry = false;
+            let newStatus = 'RetryableError';
 
-             if (e.response) {
-                const status = e.response.status;
-                if (status === 400 || status === 403 || status === 404) {
-                    safeError = `Lỗi ${status}: ${e.response.data?.message || 'Không tự động thử lại.'}`;
-                    newStatus = 'PermanentFailure';
-                } else if (status === 401) {
-                    safeError = "Lỗi 401: Hết phiên đăng nhập.";
-                    set({ syncStatus: "Phiên đăng nhập hết hạn." });
-                    finalResult.status = 'authenticationRequired';
-                    return finalResult;
-                } else if (status === 429) {
-                    safeError = "Lỗi 429: Too Many Requests.";
-                    newStatus = 'RetryableError';
-                    incrementRetry = true;
-                    await sleep(3000);
-                } else if (status >= 500) {
-                    safeError = `Lỗi Server ${status}`;
-                    incrementRetry = true;
-                    newStatus = 'RetryableError';
-                } else if (status === 409) {
-                    safeError = "Lỗi 409: Conflict dữ liệu phiếu nhập.";
-                    newStatus = 'NeedsReconciliation';
-                }
-             }
-             const newRetry = incrementRetry ? (receipt.SyncRetryCount || 0) + 1 : (receipt.SyncRetryCount || 0);
-             const nextRetryAt = incrementRetry ? new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString() : null;
-             await db.runAsync(
-               "UPDATE LocalGoodsReceipts SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
-               [safeError, newRetry, newStatus, nextRetryAt, receipt.OfflineReferenceId]
-             );
+            if (e.response) {
+              const status = e.response.status;
+              const classified = classifySyncError(status, e.response.data?.message || e.message);
+              safeError = classified.message;
+              newStatus = classified.status;
+              incrementRetry = classified.canRetry;
+
+              if (status === 401 || status === 403) {
+                set({ syncStatus: "Phiên đăng nhập hết hạn.", rerunRequested: false });
+                finalResult.status = 'authenticationRequired';
+                return finalResult;
+              } else if (status === 429) {
+                await sleep(3000);
+              }
+            }
+            const newRetry = incrementRetry ? (receipt.SyncRetryCount || 0) + 1 : (receipt.SyncRetryCount || 0);
+            const nextRetryAt = incrementRetry ? new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString() : null;
+            await db.runAsync(
+              "UPDATE LocalGoodsReceipts SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
+              [safeError, newRetry, newStatus, nextRetryAt, receipt.OfflineReferenceId]
+            );
           }
         }
 
@@ -333,92 +332,128 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
             const res = await syncOfflineOrder(syncPayload);
 
             if (res.isSuccess || (res.message && res.message.includes("ALREADY_PROCESSED")) || (res.data && res.data > 0)) {
-               const serverId = res.data || null;
-               console.log(`[Sync] order success serverId=${serverId}`);
-               await db.runAsync(
-                 "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
-                 [serverId, order.OfflineReferenceId]
-               );
-               orderSynced++;
+              const serverId = res.data || null;
+              console.log(`[Sync] order success serverId=${serverId}`);
+              await db.runAsync(
+                "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
+                [serverId, order.OfflineReferenceId]
+              );
+              orderSynced++;
             } else {
-               throw new Error(res.message || "Unknown error");
+              throw new Error(res.message || "Unknown error");
             }
           } catch (e: any) {
-             console.error(`[Sync] Lỗi đơn hàng ${order.OfflineReferenceId}:`, e.message);
+            console.error(`[Sync] Lỗi đơn hàng ${order.OfflineReferenceId}:`, e.message);
 
-             if (e.response && e.response.status === 409 && e.response.data?.message?.includes("ALREADY_PROCESSED") && e.response.data?.data) {
-                 const serverId = e.response.data.data;
-                 console.log(`[Sync] order success serverId=${serverId}`);
-                 await db.runAsync(
-                   "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
-                   [serverId, order.OfflineReferenceId]
-                 );
-                 orderSynced++;
-                 continue;
-             }
+            if (e.response && e.response.status === 409 && e.response.data?.message?.includes("ALREADY_PROCESSED") && e.response.data?.data) {
+              const serverId = e.response.data.data;
+              console.log(`[Sync] order success serverId=${serverId}`);
+              await db.runAsync(
+                "UPDATE LocalOrders SET IsSynced = 1, SyncStatus = 'Synced', SyncError = NULL, ServerId = ?, NextRetryAt = NULL WHERE OfflineReferenceId = ?",
+                [serverId, order.OfflineReferenceId]
+              );
+              orderSynced++;
+              continue;
+            }
 
-             let safeError = e.message;
-             let incrementRetry = false;
-             let newStatus = 'RetryableError';
+            let safeError = e.message || "Dữ liệu chưa được đồng bộ.";
+            let incrementRetry = false;
+            let newStatus = 'RetryableError';
 
-             if (e.response) {
-                const status = e.response.status;
-                const errorMsg = e.response.data?.message || '';
-                const isStockConflict = status === 400 && (
-                  errorMsg.toLowerCase().includes("tồn kho") ||
-                  errorMsg.toLowerCase().includes("stock") ||
-                  errorMsg.toLowerCase().includes("insufficient")
-                );
+            if (e.response) {
+              const status = e.response.status;
+              const classified = classifySyncError(status, e.response.data?.message || e.message);
+              safeError = classified.message;
+              newStatus = classified.status;
+              incrementRetry = classified.canRetry;
 
-                if (isStockConflict) {
-                    safeError = `Xung đột tồn kho máy chủ: ${errorMsg}. Cần đối soát.`;
-                    newStatus = 'NeedsReconciliation';
-                } else if (status === 400 || status === 403 || status === 404) {
-                    safeError = `Lỗi ${status}: ${errorMsg || 'Không thể đồng bộ.'}`;
-                    newStatus = 'PermanentFailure';
-                } else if (status === 401) {
-                    safeError = "Lỗi 401: Hết phiên đăng nhập.";
-                    set({ syncStatus: "Phiên đăng nhập hết hạn." });
-                    finalResult.status = 'authenticationRequired';
-                    return finalResult;
-                } else if (status === 429) {
-                    safeError = "Lỗi 429: Too Many Requests.";
-                    newStatus = 'RetryableError';
-                    incrementRetry = true;
-                    await sleep(3000);
-                } else if (status >= 500) {
-                    safeError = `Lỗi Server ${status}`;
-                    incrementRetry = true;
-                    newStatus = 'RetryableError';
-                } else if (status === 409) {
-                    safeError = `Lỗi 409 Conflict: ${errorMsg || 'Xung đột dữ liệu'}`;
-                    newStatus = 'NeedsReconciliation';
-                }
-             }
+              if (status === 401 || status === 403) {
+                set({ syncStatus: "Phiên đăng nhập hết hạn.", rerunRequested: false });
+                finalResult.status = 'authenticationRequired';
+                return finalResult;
+              } else if (status === 429) {
+                await sleep(3000);
+              }
+            }
 
-             const newRetry = incrementRetry ? (order.SyncRetryCount || 0) + 1 : (order.SyncRetryCount || 0);
-             const nextRetryAt = incrementRetry ? new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString() : null;
-             await db.runAsync(
-               "UPDATE LocalOrders SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
-               [safeError, newRetry, newStatus, nextRetryAt, order.OfflineReferenceId]
-             );
+            const newRetry = incrementRetry ? (order.SyncRetryCount || 0) + 1 : (order.SyncRetryCount || 0);
+            const nextRetryAt = incrementRetry ? new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString() : null;
+            await db.runAsync(
+              "UPDATE LocalOrders SET SyncError = ?, SyncRetryCount = ?, SyncStatus = ?, NextRetryAt = ? WHERE OfflineReferenceId = ?",
+              [safeError, newRetry, newStatus, nextRetryAt, order.OfflineReferenceId]
+            );
           }
         }
 
-        if (orderSynced > 0 || receiptSynced > 0 || unsyncedAdjustments.length > 0) {
-           set({ lastSyncAt: new Date().toISOString() });
-           // Fire all global invalidations as required by UX
-           const invStore = useCacheInvalidationStore.getState();
-           invStore.invalidatePos();
-           invStore.invalidateInventory();
-           invStore.invalidateProduct();
-           invStore.invalidateDashboard();
-           if (receiptSynced > 0) {
-              invStore.invalidateGoodsReceipt();
-           }
-           if (orderSynced > 0) {
-              invStore.invalidateOrder();
-           }
+        // 3.5. SYNC PENDING SUPPLIER MUTATIONS (Outbox for master data delete/deactivate)
+        let supplierSynced = 0;
+        const pendingSuppliers = await db.getAllAsync<{ Id: number; Name: string; SyncAction: string; RetryCount: number }>(
+          "SELECT Id, Name, SyncAction, RetryCount FROM LocalSuppliers WHERE SyncStatus = 'PendingDelete' AND (NextRetryAt IS NULL OR NextRetryAt <= ?)",
+          [nowIso]
+        );
+        for (const sup of pendingSuppliers) {
+          try {
+            if (sup.SyncAction === 'DEACTIVATE') {
+              await apiClient.put(`/Suppliers/${sup.Id}/deactivate`, { reason: "Ngừng sử dụng (Đồng bộ offline)" });
+            } else {
+              await apiClient.delete(`/Suppliers/${sup.Id}`);
+            }
+            await db.runAsync(
+              "UPDATE LocalSuppliers SET SyncStatus = 'Synced', SyncError = NULL, NextRetryAt = NULL WHERE Id = ?",
+              [sup.Id]
+            );
+            supplierSynced++;
+          } catch (e: any) {
+            const status = e.response?.status;
+            if (status === 404) {
+              // Idempotent: already deleted on server
+              await db.runAsync(
+                "UPDATE LocalSuppliers SET SyncStatus = 'Synced', SyncError = NULL, NextRetryAt = NULL WHERE Id = ?",
+                [sup.Id]
+              );
+              supplierSynced++;
+            } else if (status === 409) {
+              // Conflict: supplier has transactions on server, fallback to deactivate!
+              try {
+                await apiClient.put(`/Suppliers/${sup.Id}/deactivate`, { reason: "Ngừng sử dụng (Đồng bộ offline do có chứng từ liên kết)" });
+                await db.runAsync(
+                  "UPDATE LocalSuppliers SET SyncStatus = 'Synced', SyncAction = 'DEACTIVATE', SyncError = NULL, NextRetryAt = NULL WHERE Id = ?",
+                  [sup.Id]
+                );
+                supplierSynced++;
+              } catch (deactErr: any) {
+                console.error(`[Sync] Lỗi fallback deactivate supplier ${sup.Id}:`, deactErr.message);
+              }
+            } else {
+              const newRetry = (sup.RetryCount || 0) + 1;
+              const nextRetryAt = new Date(Date.now() + Math.min(300000, Math.pow(2, newRetry) * 2000)).toISOString();
+              await db.runAsync(
+                "UPDATE LocalSuppliers SET SyncError = ?, RetryCount = ?, NextRetryAt = ? WHERE Id = ?",
+                [e.message || "Lỗi đồng bộ", newRetry, nextRetryAt, sup.Id]
+              );
+            }
+          }
+        }
+
+        if (supplierSynced > 0) {
+          useCacheInvalidationStore.getState().invalidateSupplier();
+          useCacheInvalidationStore.getState().invalidateGoodsReceipt();
+        }
+
+        if (orderSynced > 0 || receiptSynced > 0 || supplierSynced > 0 || unsyncedAdjustments.length > 0) {
+          set({ lastSyncAt: new Date().toISOString() });
+          // Fire all global invalidations as required by UX
+          const invStore = useCacheInvalidationStore.getState();
+          invStore.invalidatePos();
+          invStore.invalidateInventory();
+          invStore.invalidateProduct();
+          invStore.invalidateDashboard();
+          if (receiptSynced > 0) {
+            invStore.invalidateGoodsReceipt();
+          }
+          if (orderSynced > 0) {
+            invStore.invalidateOrder();
+          }
         }
 
         // 4. PULL INCREMENTAL SERVER CHANGES (Fetch updates from other devices / server stock changes)
@@ -435,23 +470,26 @@ export const useGlobalSyncStore = create<SyncState>((set, get) => ({
         set({ syncStatus: `Hoàn tất đồng bộ.` });
 
         finalResult = {
-            status: bd.orders === 0 && bd.receipts === 0 ? 'success' : 'partialSuccess',
-            syncedOrderCount: orderSynced,
-            syncedReceiptCount: receiptSynced,
-            pendingOrderCount: bd.orders,
-            pendingReceiptCount: bd.receipts,
-            errors: bd.errors
+          status: bd.orders === 0 && bd.receipts === 0 && (bd.suppliers || 0) === 0 ? 'success' : 'partialSuccess',
+          syncedOrderCount: orderSynced,
+          syncedReceiptCount: receiptSynced,
+          pendingOrderCount: bd.orders,
+          pendingReceiptCount: bd.receipts,
+          errors: bd.errors
         };
 
-        console.log(`[Sync] complete pendingOrders=${bd.orders} pendingReceipts=${bd.receipts}`);
+        console.log(`[Sync #${cycleId}] complete pendingOrders=${bd.orders} pendingReceipts=${bd.receipts}`);
         return finalResult;
       } catch (error) {
-        console.error("[Sync] Lỗi không mong muốn:", error);
-        set({ syncStatus: "Lỗi đồng bộ." });
+        console.error(`[Sync #${cycleId}] Lỗi không mong muốn:`, error);
+        set({ syncStatus: "Lỗi đồng bộ.", rerunRequested: false });
         return finalResult;
       } finally {
-        set({ isSyncing: false, activeSyncPromise: null });
-        if (get().rerunRequested) {
+        const shouldRerun = get().rerunRequested;
+        set({ isSyncing: false, activeSyncPromise: null, rerunRequested: false });
+        const currentUser = useAuthStore.getState().user;
+        if (shouldRerun && currentUser && !isDemoUser(currentUser) && !currentUser.isDemo && finalResult.status !== 'authenticationRequired') {
+          console.log(`[Sync #${cycleId}] Triggering coalesced single rerun.`);
           setTimeout(() => get().syncNow("rerun"), 100);
         }
       }

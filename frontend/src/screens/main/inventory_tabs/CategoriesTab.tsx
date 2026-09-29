@@ -286,11 +286,16 @@ export default function CategoriesTab() {
           className="absolute right-6 w-14 h-14 bg-black border-2 border-black items-center justify-center"
           style={{
             bottom: 85,
-            shadowColor: "#000",
-            shadowOffset: { width: 4, height: 4 },
-            shadowOpacity: 1,
-            shadowRadius: 0,
-            elevation: 5,
+            ...Platform.select({
+              web: { boxShadow: "4px 4px 0px #000" } as any,
+              default: {
+                shadowColor: "#000",
+                shadowOffset: { width: 4, height: 4 },
+                shadowOpacity: 1,
+                shadowRadius: 0,
+                elevation: 5,
+              }
+            })
           }}
         >
           <Ionicons name="add" size={28} color="#fff" />

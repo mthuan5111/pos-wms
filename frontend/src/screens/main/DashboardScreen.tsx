@@ -37,10 +37,10 @@ export default function DashboardScreen() {
   const inFlightRef = useRef(false);
   const canCreateReceipt = user?.role === "Admin" || user?.role === "Manager" || user?.role === "WarehouseStaff";
 
-  const [summaryState, setSummaryState] = useState<{loading: boolean, error: string|null, current: DashboardSummaryDto|null, prev: DashboardSummaryDto|null}>({loading: canViewReports, error: null, current: null, prev: null});
-  const [chartState, setChartState] = useState<{loading: boolean, error: string|null, data: RevenueComparisonPointDto[]|null}>({loading: canViewReports, error: null, data: null});
-  const [topProductsState, setTopProductsState] = useState<{loading: boolean, error: string|null, data: TopProductDto[]|null}>({loading: canViewReports, error: null, data: null});
-  const [lowStockState, setLowStockState] = useState<{loading: boolean, error: string|null, data: LowStockProductDto[]|null}>({loading: canViewReports, error: null, data: null});
+  const [summaryState, setSummaryState] = useState<{ loading: boolean, error: string | null, current: DashboardSummaryDto | null, prev: DashboardSummaryDto | null }>({ loading: canViewReports, error: null, current: null, prev: null });
+  const [chartState, setChartState] = useState<{ loading: boolean, error: string | null, data: RevenueComparisonPointDto[] | null }>({ loading: canViewReports, error: null, data: null });
+  const [topProductsState, setTopProductsState] = useState<{ loading: boolean, error: string | null, data: TopProductDto[] | null }>({ loading: canViewReports, error: null, data: null });
+  const [lowStockState, setLowStockState] = useState<{ loading: boolean, error: string | null, data: LowStockProductDto[] | null }>({ loading: canViewReports, error: null, data: null });
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<number>>(new Set());
   const [issueFilter, setIssueFilter] = useState<"all" | "out" | "low" | "missing_price">("all");
 
@@ -291,7 +291,7 @@ export default function DashboardScreen() {
           BÁO CÁO & PHÂN TÍCH KINH DOANH
         </Text>
         <Text className="mt-1" style={{ fontSize: 10, color: '#525252' }}>
-          CẬP NHẬT LÚC {new Date().toLocaleTimeString('vi-VN', {hour: '2-digit', minute: '2-digit'})}, {new Date().toLocaleDateString('vi-VN')}
+          CẬP NHẬT LÚC {new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}, {new Date().toLocaleDateString('vi-VN')}
         </Text>
       </View>
 
@@ -328,11 +328,11 @@ export default function DashboardScreen() {
               <View className="flex-row items-center mb-1.5">
                 <Ionicons name="shield-checkmark" size={18} color="#000" />
                 <Text className="ml-2 font-bold text-xs uppercase tracking-wider text-black">
-                  Tài khoản trải nghiệm Sandbox (@demo_viewer)
+                  Chế độ trải nghiệm POS & WMS
                 </Text>
               </View>
               <Text className="text-xs text-neutral-600 leading-relaxed">
-                Dữ liệu báo cáo doanh thu và phân tích tài chính chỉ khả dụng cho Quản trị viên (Admin) và Quản lý (Manager). Bạn có thể tự do thử nghiệm các tính năng Bán hàng POS, Quản lý kho và Hóa đơn trên hệ thống.
+                Dữ liệu báo cáo doanh thu và phân tích tài chính chỉ khả dụng cho Quản trị viên và Quản lý. Bạn có thể tự do thử nghiệm các tính năng Bán hàng, Quản lý kho và Hóa đơn trên hệ thống.
               </Text>
             </View>
           )}
@@ -361,18 +361,18 @@ export default function DashboardScreen() {
           ) : (
             <>
               {/* 4 KPIs */}
-              <View className="flex-row flex-wrap" style={{ gap: 16, marginBottom: 24 }}>
+              <View className="flex-row flex-wrap" style={{ gap: 12, marginBottom: 20 }}>
                 {/* 1. DOANH THU THUẦN */}
-                <View className={`border-[1.5px] border-black bg-white p-4 ${isDesktop ? 'flex-1' : isTablet ? 'w-[47%]' : 'w-full'}`}>
+                <View className={`border-[1.5px] border-black bg-white p-3.5 sm:p-4 ${isDesktop ? 'flex-1 min-w-[200px]' : 'w-[47%] min-w-[140px] flex-1'}`}>
                   <Text style={{ fontSize: 10, letterSpacing: 1.5, color: '#525252', textTransform: 'uppercase', fontWeight: 'bold' }}>
                     DOANH THU THUẦN
                   </Text>
-                  <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
+                  <Text className="text-black mt-2 font-black" style={{ fontSize: isDesktop ? 22 : 18 }}>
                     {isDemo ? "TRẢI NGHIỆM" : formatCurrency(netRevenue)}
                   </Text>
                   <View className="mt-2">
                     {isDemo ? (
-                      <Text style={{ fontSize: 11, color: '#525252' }}>Chỉ hiển thị cho Admin & Manager</Text>
+                      <Text style={{ fontSize: 11, color: '#525252' }}>Chỉ hiển thị cho Quản trị viên và Quản lý</Text>
                     ) : (
                       renderTrend(revChange)
                     )}
@@ -380,13 +380,13 @@ export default function DashboardScreen() {
                 </View>
 
                 {/* 2. LỢI NHUẬN GỘP */}
-                <View className={`border-[1.5px] border-black bg-black p-4 ${isDesktop ? 'flex-1' : isTablet ? 'w-[47%]' : 'w-full'}`}>
+                <View className={`border-[1.5px] border-black bg-black p-3.5 sm:p-4 ${isDesktop ? 'flex-1 min-w-[200px]' : 'w-[47%] min-w-[140px] flex-1'}`}>
                   <Text style={{ fontSize: 10, letterSpacing: 1.5, color: '#a3a3a3', textTransform: 'uppercase', fontWeight: 'bold' }}>
                     LỢI NHUẬN GỘP
                   </Text>
                   {currentSummary?.hasGrossProfitData === false || grossProfit == null || isDemo ? (
                     <View className="mt-2">
-                      <Text className="text-white font-bold" style={{ fontSize: 13, color: '#94a3b8' }}>
+                      <Text className="text-white font-bold" style={{ fontSize: isDesktop ? 13 : 11, color: '#94a3b8' }}>
                         {isDemo ? "CHẾ ĐỘ TRẢI NGHIỆM" : "CHƯA ĐỦ DỮ LIỆU GIÁ VỐN"}
                       </Text>
                       <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
@@ -395,12 +395,12 @@ export default function DashboardScreen() {
                     </View>
                   ) : (
                     <>
-                      <Text className="text-white mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
+                      <Text className="text-white mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: isDesktop ? 22 : 18 }}>
                         {formatCurrency(grossProfit)}
                       </Text>
                       <View className="mt-2 flex-row justify-between items-center">
                         <Text style={{ fontSize: 11, color: '#a3a3a3' }}>
-                          Biên LN: {currentSummary?.grossMarginPercent?.toFixed(1) ?? 'N/A'}%
+                          Biên LN: {currentSummary?.grossMarginPercent != null ? currentSummary.grossMarginPercent.toFixed(1) + '%' : '0%'}
                         </Text>
                       </View>
                       <View className="mt-1">
@@ -419,11 +419,11 @@ export default function DashboardScreen() {
                 </View>
 
                 {/* 3. ĐƠN HOÀN TẤT */}
-                <View className={`border-[1.5px] border-black bg-white p-4 ${isDesktop ? 'flex-1' : isTablet ? 'w-[47%]' : 'w-full'}`}>
+                <View className={`border-[1.5px] border-black bg-white p-3.5 sm:p-4 ${isDesktop ? 'flex-1 min-w-[200px]' : 'w-[47%] min-w-[140px] flex-1'}`}>
                   <Text style={{ fontSize: 10, letterSpacing: 1.5, color: '#525252', textTransform: 'uppercase', fontWeight: 'bold' }}>
                     ĐƠN HOÀN TẤT
                   </Text>
-                  <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
+                  <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: isDesktop ? 22 : 18 }}>
                     {isDemo ? "--" : `${completedOrders} đơn`}
                   </Text>
                   <Text style={{ fontSize: 11, color: '#525252', marginTop: 4 }}>
@@ -433,11 +433,11 @@ export default function DashboardScreen() {
                 </View>
 
                 {/* 4. TRUNG BÌNH/ĐƠN */}
-                <View className={`border-[1.5px] border-black bg-white p-4 ${isDesktop ? 'flex-1' : isTablet ? 'w-[47%]' : 'w-full'}`}>
+                <View className={`border-[1.5px] border-black bg-white p-3.5 sm:p-4 ${isDesktop ? 'flex-1 min-w-[200px]' : 'w-[47%] min-w-[140px] flex-1'}`}>
                   <Text style={{ fontSize: 10, letterSpacing: 1.5, color: '#525252', textTransform: 'uppercase', fontWeight: 'bold' }}>
                     TRUNG BÌNH/ĐƠN
                   </Text>
-                  <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: 22 }}>
+                  <Text className="text-black mt-2 font-black" style={{ fontFamily: 'sans-serif', fontSize: isDesktop ? 22 : 18 }}>
                     {isDemo ? "--" : formatCurrency(avgOrderVal)}
                   </Text>
                   <View className="mt-2">
@@ -516,10 +516,10 @@ export default function DashboardScreen() {
                     <View className="py-8 items-center text-center px-4">
                       <Ionicons name="information-circle-outline" size={32} color="#000" />
                       <Text style={{ fontSize: 12, color: '#000', fontWeight: 'bold', marginTop: 6, textAlign: 'center' }}>
-                        CHẾ ĐỘ TRẢI NGHIỆM: BÁO CÁO CẦN XỬ LÝ DÀNH CHO ADMIN & MANAGER
+                        CHẾ ĐỘ TRẢI NGHIỆM: BÁO CÁO CẦN XỬ LÝ DÀNH CHO QUẢN TRỊ VIÊN VÀ QUẢN LÝ
                       </Text>
                       <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
-                        Tài khoản Demo có thể tự do xem tồn kho trong mục Kho hàng và thực hiện bán hàng trong mục POS.
+                        Tài khoản trải nghiệm có thể tự do xem tồn kho trong mục Kho hàng và thực hiện bán hàng trong mục Bán hàng.
                       </Text>
                     </View>
                   ) : displayedIssues.length === 0 ? (
@@ -534,7 +534,12 @@ export default function DashboardScreen() {
                       {/* Select all header */}
                       {canCreateReceipt && actionableIssues.length > 0 && (
                         <View className="flex-row items-center justify-between pb-2 mb-2 border-b border-gray-200">
-                          <TouchableOpacity onPress={toggleSelectAll} className="flex-row items-center">
+                          <TouchableOpacity
+                            onPress={toggleSelectAll}
+                            accessibilityRole="checkbox"
+                            accessibilityLabel="Chọn tất cả mặt hàng cần xử lý"
+                            className="flex-row items-center"
+                          >
                             <Ionicons
                               name={actionableIssues.every(i => selectedIssueIds.has(i.productId)) ? "checkbox" : "square-outline"}
                               size={18}
@@ -562,7 +567,12 @@ export default function DashboardScreen() {
                             >
                               <View className="flex-row items-center flex-1 min-w-[200px]">
                                 {canCreateReceipt && isActionable && (
-                                  <TouchableOpacity onPress={() => toggleSelectIssue(item.productId)} className="mr-3">
+                                  <TouchableOpacity
+                                    onPress={() => toggleSelectIssue(item.productId)}
+                                    accessibilityRole="checkbox"
+                                    accessibilityLabel={`Chọn mặt hàng ${item.productName}`}
+                                    className="mr-3"
+                                  >
                                     <Ionicons
                                       name={isSelected ? "checkbox" : "square-outline"}
                                       size={20}
@@ -667,7 +677,7 @@ export default function DashboardScreen() {
                           BIỂU ĐỒ DOANH THU NỘI BỘ
                         </Text>
                         <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
-                          Biểu đồ phân tích doanh thu chỉ hiển thị cho tài khoản Quản trị viên (Admin) và Quản lý (Manager).
+                          Biểu đồ phân tích doanh thu chỉ hiển thị cho tài khoản Quản trị viên và Quản lý.
                         </Text>
                       </View>
                     ) : chartState.error ? (
@@ -795,7 +805,7 @@ export default function DashboardScreen() {
                       TOP SẢN PHẨM BÁN CHẠY
                     </Text>
                     <Text style={{ fontSize: 11, color: '#525252', marginTop: 4, textAlign: 'center' }}>
-                      Báo cáo sản phẩm bán chạy chỉ hiển thị cho Quản trị viên (Admin) và Quản lý (Manager).
+                      Báo cáo sản phẩm bán chạy chỉ hiển thị cho Quản trị viên và Quản lý.
                     </Text>
                   </View>
                 ) : topProductsState.error ? (

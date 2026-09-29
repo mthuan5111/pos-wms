@@ -230,7 +230,7 @@ export default function InvoiceScreen() {
               quantity: d.Quantity,
               unitPrice: d.Price
             }));
-          } catch {}
+          } catch { }
 
           result.push({
             key: `offline:${lo.OfflineReferenceId}`,
@@ -266,7 +266,7 @@ export default function InvoiceScreen() {
                 quantity: d.Quantity,
                 unitPrice: d.Price ?? d.UnitPrice ?? 0,
               }));
-            } catch {}
+            } catch { }
 
             result.unshift({
               key: `demo:${so.OfflineReferenceId}`,
@@ -274,7 +274,7 @@ export default function InvoiceScreen() {
               offlineId: so.OfflineReferenceId,
               totalAmount: so.TotalAmount,
               date: so.CreatedAt,
-              employee: "Khách Trải Nghiệm (Demo)",
+              employee: "Khách Trải Nghiệm",
               paymentMethod: String(so.PaymentMethod).toUpperCase().includes("QR") ? "Chuyển khoản QR (Sandbox)" : "Tiền mặt (Sandbox)",
               status: "Trải nghiệm",
               isSynced: false,
@@ -352,7 +352,7 @@ export default function InvoiceScreen() {
               quantity: d.Quantity,
               costPrice: d.CostPrice
             }));
-          } catch {}
+          } catch { }
 
           receiptResult.push({
             key: `offline:${lr.OfflineReferenceId}`,
@@ -389,7 +389,7 @@ export default function InvoiceScreen() {
                 quantity: d.Quantity,
                 costPrice: d.MockCostPrice ?? d.CostPrice ?? 0,
               }));
-            } catch {}
+            } catch { }
 
             receiptResult.unshift({
               key: `demo:${sr.OfflineReferenceId}`,
@@ -397,7 +397,7 @@ export default function InvoiceScreen() {
               offlineId: sr.OfflineReferenceId,
               totalAmount: sr.TotalAmount,
               date: sr.CreatedAt,
-              creator: "Khách Trải Nghiệm (Demo)",
+              creator: "Khách Trải Nghiệm",
               supplier: sr.SupplierName || "Nhà cung cấp",
               remarks: sr.Remarks || "Phiếu nhập thử nghiệm",
               status: "Trải nghiệm",
@@ -434,7 +434,7 @@ export default function InvoiceScreen() {
     try {
       const db = await getDBConnection();
       const sups = await db.getAllAsync<{ Id: number; Name: string }>(
-        "SELECT Id, Name FROM LocalSuppliers ORDER BY Name ASC"
+        "SELECT Id, Name FROM LocalSuppliers WHERE (IsDeleted = 0 OR IsDeleted IS NULL) AND (IsActive = 1 OR IsActive IS NULL) ORDER BY Name ASC"
       );
       const prods = await db.getAllAsync<{ Id: string; Name: string; Price: number; Barcode: string }>(
         "SELECT Id, Name, Price, Barcode FROM LocalProducts ORDER BY Name ASC"
@@ -642,8 +642,8 @@ export default function InvoiceScreen() {
         const demoRefId = demoRes.offlineReferenceId;
         setIsCreateReceiptOpen(false);
         useModalStore.getState().showModal({
-          title: "Thành công (Demo Sandbox)",
-          message: `Đã lập phiếu nhập kho thử nghiệm ${demoRefId} thành công trong Sandbox. Không ảnh hưởng dữ liệu chính.`,
+          title: "Thành công",
+          message: `Đã lập phiếu nhập kho thử nghiệm ${demoRefId} thành công.`,
           type: "success"
         });
         await loadData();
@@ -682,18 +682,18 @@ export default function InvoiceScreen() {
   const handlePrintOrder = async (order: MergedOrder) => {
     const items = (order.details && order.details.length > 0)
       ? order.details.map(d => ({
-          productName: d.productName,
-          barcode: d.barcode,
-          quantity: d.quantity,
-          unitPrice: d.unitPrice,
-          lineTotal: d.unitPrice * d.quantity
-        }))
+        productName: d.productName,
+        barcode: d.barcode,
+        quantity: d.quantity,
+        unitPrice: d.unitPrice,
+        lineTotal: d.unitPrice * d.quantity
+      }))
       : [{
-          productName: 'Đơn hàng POS',
-          quantity: 1,
-          unitPrice: order.totalAmount,
-          lineTotal: order.totalAmount
-        }];
+        productName: 'Đơn hàng POS',
+        quantity: 1,
+        unitPrice: order.totalAmount,
+        lineTotal: order.totalAmount
+      }];
 
     const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
     const isOrderDemo = isDemo || order.offlineId?.startsWith('DEMO-');
@@ -726,18 +726,18 @@ export default function InvoiceScreen() {
   const handlePrintReceipt = async (receipt: MergedReceipt) => {
     const items = (receipt.details && receipt.details.length > 0)
       ? receipt.details.map(d => ({
-          productName: d.productName,
-          barcode: d.barcode,
-          quantity: d.quantity,
-          costPrice: d.costPrice,
-          lineTotal: d.costPrice * d.quantity
-        }))
+        productName: d.productName,
+        barcode: d.barcode,
+        quantity: d.quantity,
+        costPrice: d.costPrice,
+        lineTotal: d.costPrice * d.quantity
+      }))
       : [{
-          productName: 'Mặt hàng nhập kho',
-          quantity: 1,
-          costPrice: receipt.totalAmount,
-          lineTotal: receipt.totalAmount
-        }];
+        productName: 'Mặt hàng nhập kho',
+        quantity: 1,
+        costPrice: receipt.totalAmount,
+        lineTotal: receipt.totalAmount
+      }];
 
     const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
     const isReceiptDemo = isDemo || receipt.offlineId?.startsWith('DEMO-');
@@ -793,11 +793,11 @@ export default function InvoiceScreen() {
       <View className="flex-row justify-between items-center border-t-2 border-gray-100 pt-3 mt-1">
         <View className="flex-row items-center">
           {item.offlineId.startsWith('DEMO-') ? (
-            <><Ionicons name="sparkles" size={18} color="#b45309" /><Text className="ml-1 text-amber-700 font-bold text-xs uppercase">TRẢI NGHIỆM (SANDBOX)</Text></>
+            <><Ionicons name="sparkles" size={18} color="#b45309" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">TRẢI NGHIỆM (SANDBOX)</Text></>
           ) : item.isSynced ? (
-            <><Ionicons name="checkmark-circle" size={18} color="#16a34a" /><Text className="ml-1 text-green-600 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
+            <><Ionicons name="checkmark-circle" size={18} color="#15803d" /><Text className="ml-1 text-green-700 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
           ) : (
-            <><Ionicons name="time" size={18} color="#ea580c" /><Text className="ml-1 text-orange-600 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
+            <><Ionicons name="time" size={18} color="#92400e" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
           )}
         </View>
         <View className="flex-row items-center">
@@ -821,8 +821,8 @@ export default function InvoiceScreen() {
           {item.offlineId.startsWith('DEMO-')
             ? `${formatCurrency(item.totalAmount)} (Mô phỏng)`
             : canViewCostPrice && item.totalAmount != null
-            ? formatCurrency(item.totalAmount)
-            : "Không có quyền xem"}
+              ? formatCurrency(item.totalAmount)
+              : "Không có quyền xem"}
         </Text>
       </View>
       <View className="flex-row items-center mb-2">
@@ -841,11 +841,11 @@ export default function InvoiceScreen() {
       <View className="flex-row justify-between items-center border-t-2 border-gray-100 pt-3 mt-1">
         <View className="flex-row items-center">
           {item.offlineId.startsWith('DEMO-') ? (
-            <><Ionicons name="sparkles" size={18} color="#b45309" /><Text className="ml-1 text-amber-700 font-bold text-xs uppercase">TRẢI NGHIỆM (SANDBOX)</Text></>
+            <><Ionicons name="sparkles" size={18} color="#b45309" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">TRẢI NGHIỆM (SANDBOX)</Text></>
           ) : item.isSynced ? (
-            <><Ionicons name="checkmark-circle" size={18} color="#16a34a" /><Text className="ml-1 text-green-600 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
+            <><Ionicons name="checkmark-circle" size={18} color="#15803d" /><Text className="ml-1 text-green-700 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
           ) : (
-            <><Ionicons name="time" size={18} color="#ea580c" /><Text className="ml-1 text-orange-600 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
+            <><Ionicons name="time" size={18} color="#92400e" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
           )}
         </View>
         <View className="flex-row items-center">
@@ -900,19 +900,25 @@ export default function InvoiceScreen() {
           <View className="flex-row border-b-2 border-black mt-1">
             <TouchableOpacity
               testID="tab-sales"
+              accessibilityRole="tab"
+              accessibilityLabel="Phiếu bán"
+              accessibilityState={{ selected: activeTab === "sales" }}
               onPress={() => setActiveTab("sales")}
               className={`flex-1 items-center py-2.5 ${activeTab === "sales" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "sales" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "sales" ? "text-black" : "text-neutral-600"}`}>
                 Phiếu bán
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID="tab-imports"
+              accessibilityRole="tab"
+              accessibilityLabel="Phiếu nhập"
+              accessibilityState={{ selected: activeTab === "imports" }}
               onPress={() => setActiveTab("imports")}
               className={`flex-1 items-center py-2.5 ${activeTab === "imports" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "imports" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "imports" ? "text-black" : "text-neutral-600"}`}>
                 Phiếu nhập
               </Text>
             </TouchableOpacity>
@@ -1097,8 +1103,8 @@ export default function InvoiceScreen() {
                   {selectedReceipt?.offlineId?.startsWith('DEMO-')
                     ? `${formatCurrency(selectedReceipt?.totalAmount || 0)} (Mô phỏng)`
                     : canViewCostPrice && selectedReceipt?.totalAmount != null
-                    ? formatCurrency(selectedReceipt.totalAmount)
-                    : "Không có quyền xem"}
+                      ? formatCurrency(selectedReceipt.totalAmount)
+                      : "Không có quyền xem"}
                 </Text>
               </View>
 

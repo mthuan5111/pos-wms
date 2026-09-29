@@ -111,3 +111,7 @@ scratch/
 # Generated SQL migration scripts
 backend/MigrationScript.sql
 backend/backend/
+
+# Local test and administrative scripts
+tests/
+scripts/

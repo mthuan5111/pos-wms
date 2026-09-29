@@ -60,7 +60,7 @@ namespace POS_WMS.Infrastructure.Services
             {
                 Id = 0, // Id = 0 triệt tiêu hoàn toàn nguy cơ va chạm với Users IDENTITY >= 1
                 Username = "demo_viewer",
-                Name = "Khách Trải Nghiệm (Demo)",
+                Name = "Khách Trải Nghiệm",
                 Role = POS_WMS.Domain.Enums.UserRole.DemoUser,
                 IsActive = true
             };

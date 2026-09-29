@@ -81,10 +81,23 @@ namespace POS_WMS.WebApi.Middlewares
                 _logger.LogError(ex, "Lỗi khi ghi AuditLog trong GlobalExceptionMiddleware");
             }
 
+            // Đảm bảo header CORS xuất hiện trên response lỗi nếu Origin hợp lệ
+            if (!context.Response.Headers.ContainsKey("Access-Control-Allow-Origin") &&
+                context.Request.Headers.TryGetValue("Origin", out var originValues))
+            {
+                var origin = originValues.ToString();
+                var validator = context.RequestServices.GetService<Func<string?, bool>>();
+                if (validator != null && validator(origin))
+                {
+                    context.Response.Headers["Access-Control-Allow-Origin"] = origin;
+                    context.Response.Headers["Vary"] = "Origin";
+                }
+            }
+
             context.Response.ContentType = "application/json";
             context.Response.StatusCode = 500;
 
-            var response = ApiResponse<object>.Failure($"Đã xảy ra lỗi máy chủ. Vui lòng liên hệ quản trị viên. CorrelationId: {correlationId}");
+            var response = ApiResponse<object>.Failure("Hệ thống gặp sự cố khi xử lý yêu cầu. Vui lòng thử lại sau.", "ERR_INTERNAL_500");
 
             var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
             var json = JsonSerializer.Serialize(response, options);

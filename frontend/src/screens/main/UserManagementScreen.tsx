@@ -348,7 +348,12 @@ export default function UserManagementScreen() {
                 </View>
               </View>
               <View className="bg-black px-2.5 py-1">
-                <Text className="text-white font-bold text-xs uppercase tracking-wider">{item.role}</Text>
+                <Text className="text-white font-bold text-xs uppercase tracking-wider">
+                  {item.role === 'Admin' ? 'Quản trị viên' :
+                   item.role === 'Manager' ? 'Quản lý' :
+                   item.role === 'Cashier' ? 'Thu ngân' :
+                   item.role === 'WarehouseStaff' ? 'Thủ kho' : item.role}
+                </Text>
               </View>
             </View>
 
@@ -363,6 +368,7 @@ export default function UserManagementScreen() {
                   onValueChange={() => handleToggleStatus(item)}
                   trackColor={{ false: "#e5e7eb", true: "#000" }}
                   thumbColor={"#fff"}
+                  accessibilityLabel={`Trạng thái kích hoạt của người dùng ${item.name}`}
                 />
               </View>
             </View>
@@ -370,6 +376,8 @@ export default function UserManagementScreen() {
             <View className="flex-row justify-end mt-3 pt-3 border-t border-dashed border-gray-300 gap-2 flex-wrap">
               <TouchableOpacity
                 testID={`btn-reset-password-${item.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={`Đổi mật khẩu cho ${item.name}`}
                 className="flex-row items-center border border-black px-3 py-1.5 bg-white"
                 onPress={() => handleOpenResetPassword(item)}
               >
@@ -379,6 +387,8 @@ export default function UserManagementScreen() {
 
               <TouchableOpacity
                 testID={`btn-edit-user-${item.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={`Sửa thông tin ${item.name}`}
                 className="flex-row items-center border border-black px-3 py-1.5 bg-white"
                 onPress={() => handleOpenEdit(item)}
               >
@@ -389,11 +399,13 @@ export default function UserManagementScreen() {
               {item.username.toLowerCase() !== 'admin' && (
                 <TouchableOpacity
                   testID={`btn-delete-user-${item.id}`}
-                  className="flex-row items-center border border-red-600 bg-red-50 px-3 py-1.5"
+                  accessibilityRole="button"
+                  accessibilityLabel={`Xóa người dùng ${item.name}`}
+                  className="flex-row items-center border border-red-700 bg-red-50 px-3 py-1.5"
                   onPress={() => handleDeleteUser(item)}
                 >
-                  <Ionicons name="trash-outline" size={14} color="#dc2626" />
-                  <Text className="text-xs font-bold uppercase text-red-600 ml-1">Xóa</Text>
+                  <Ionicons name="trash-outline" size={14} color="#b91c1c" />
+                  <Text className="text-xs font-bold uppercase text-red-700 ml-1">Xóa</Text>
                 </TouchableOpacity>
               )}
             </View>
