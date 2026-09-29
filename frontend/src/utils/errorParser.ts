@@ -45,13 +45,27 @@ export function parseEntityId(response: any): number | null {
 }
 
 export const parseApiError = (error: any): AppError => {
-  const defaultMessage = 'Không thể kết nối máy chủ. Vui lòng kiểm tra kết nối và thử lại.';
-
   if (!error.response) {
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || error.message?.toLowerCase().includes('timeout')) {
+      return {
+        type: 'network',
+        title: 'Hết thời gian chờ',
+        message: 'Kết nối mất nhiều thời gian hơn dự kiến. Vui lòng thử lại.'
+      };
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return {
+        type: 'network',
+        title: 'Thiết bị ngoại tuyến',
+        message: 'Thiết bị đang ngoại tuyến. Bạn vẫn có thể tiếp tục với các chức năng hỗ trợ ngoại tuyến.'
+      };
+    }
+
     return {
       type: 'network',
-      title: 'Lỗi kết nối',
-      message: defaultMessage
+      title: 'Tạm thời không phản hồi',
+      message: 'Hệ thống đang tạm thời không phản hồi. Vui lòng thử lại sau.'
     };
   }
 
@@ -60,39 +74,47 @@ export const parseApiError = (error: any): AppError => {
   const correlationId = error.response.headers?.['x-correlation-id'];
 
   let type: AppError['type'] = 'unknown';
-  let title = data.title || error.response.statusText || 'Lỗi';
+  let title = 'Thông báo';
   let message = data.message || '';
   let fieldErrors: Record<string, string[]> | undefined = undefined;
 
   if (status === 400) {
     type = 'validation';
-    title = 'Lỗi Dữ Liệu';
+    title = 'Thông tin chưa hợp lệ';
     if (data.errors) {
       fieldErrors = data.errors;
-      message = 'Vui lòng kiểm tra lại các trường bị lỗi.';
+      message = 'Vui lòng kiểm tra lại các mục chưa hợp lệ.';
     } else {
-      message = data.message || data.title || 'Dữ liệu không hợp lệ.';
+      message = data.message || 'Một số thông tin chưa hợp lệ. Vui lòng kiểm tra lại.';
     }
   } else if (status === 401) {
     type = 'auth';
-    title = 'Lỗi Xác Thực';
+    title = 'Phiên đăng nhập hết hạn';
     message = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
   } else if (status === 403) {
     type = 'forbidden';
-    title = 'Lỗi Quyền Hạn';
-    message = 'Tài khoản không có quyền thực hiện thao tác này.';
+    title = 'Không có quyền thao tác';
+    message = 'Bạn không có quyền thực hiện thao tác này.';
   } else if (status === 404) {
     type = 'not_found';
-    title = 'Không Tìm Thấy';
-    message = 'Phiên bản máy chủ hiện tại chưa hỗ trợ hoặc tài nguyên không tồn tại.';
+    title = 'Không tìm thấy';
+    message = 'Không tìm thấy dữ liệu hoặc chức năng được yêu cầu.';
   } else if (status === 409) {
     type = 'conflict';
-    title = 'Lỗi Xung Đột';
-    message = data.message || 'Xung đột dữ liệu.';
+    title = 'Không thể đồng bộ dữ liệu';
+    message = data.message || 'Dữ liệu trên hệ thống đã được cập nhật từ thiết bị khác. Vui lòng tải lại trước khi tiếp tục.';
+  } else if (status === 422) {
+    type = 'validation';
+    title = 'Thông tin chưa hợp lệ';
+    message = 'Một số thông tin chưa hợp lệ. Vui lòng kiểm tra lại.';
+  } else if (status === 429) {
+    type = 'unknown';
+    title = 'Thao tác quá nhanh';
+    message = 'Bạn thao tác quá nhanh. Vui lòng đợi một chút rồi thử lại.';
   } else if (status >= 500) {
     type = 'server';
-    title = 'Lỗi Máy Chủ';
-    message = 'Máy chủ gặp lỗi. Mã tra cứu: ' + (correlationId || 'N/A');
+    title = 'Sự cố hệ thống';
+    message = 'Hệ thống gặp sự cố khi xử lý yêu cầu. Vui lòng thử lại.';
   }
 
   return {
@@ -106,26 +128,50 @@ export const parseApiError = (error: any): AppError => {
   };
 };
 
-export function classifySyncError(status: number, message: string = ''): { status: string; canRetry: boolean } {
+export function classifySyncError(status: number, message: string = ''): { status: string; canRetry: boolean; message: string } {
   const msgLower = (message || '').toLowerCase();
   const isStockConflict = status === 400 && (
     msgLower.includes("tồn kho") || msgLower.includes("stock") || msgLower.includes("insufficient")
   );
 
   if (isStockConflict) {
-    return { status: 'NeedsReconciliation', canRetry: false };
+    return {
+      status: 'NeedsReconciliation',
+      canRetry: false,
+      message: 'Dữ liệu tồn kho trên hệ thống đã thay đổi. Vui lòng tải lại dữ liệu để đối soát.'
+    };
   }
   if (status === 400 || status === 403 || status === 404) {
-    return { status: 'PermanentFailure', canRetry: false };
+    return {
+      status: 'PermanentFailure',
+      canRetry: false,
+      message: 'Không thể đồng bộ dữ liệu do thông tin không hợp lệ hoặc thiếu quyền hạn.'
+    };
   }
   if (status === 401) {
-    return { status: 'RetryableError', canRetry: true };
-  }
-  if (status >= 500) {
-    return { status: 'RetryableError', canRetry: true };
+    return {
+      status: 'RetryableError',
+      canRetry: true,
+      message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
+    };
   }
   if (status === 409) {
-    return { status: 'NeedsReconciliation', canRetry: false };
+    return {
+      status: 'NeedsReconciliation',
+      canRetry: false,
+      message: 'Không thể đồng bộ dữ liệu. Dữ liệu trên hệ thống đã được cập nhật từ thiết bị khác. Vui lòng tải lại trước khi tiếp tục.'
+    };
   }
-  return { status: 'RetryableError', canRetry: true };
+  if (status >= 500) {
+    return {
+      status: 'RetryableError',
+      canRetry: true,
+      message: 'Dữ liệu chưa được đồng bộ. Hệ thống sẽ tự động thử lại khi kết nối ổn định.'
+    };
+  }
+  return {
+    status: 'RetryableError',
+    canRetry: true,
+    message: 'Dữ liệu chưa được đồng bộ. Hệ thống sẽ tự động thử lại khi kết nối ổn định.'
+  };
 }

@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -33,16 +34,19 @@ import * as ImagePicker from 'expo-image-picker';
 import apiClient from "@/services/apiClient";
 import { useAuthStore } from "@/store/authStore";
 import { useModalStore } from "@/store/useModalStore";
-import { uploadImageToCloudinary } from "@/services/imageUploadService";
+import { uploadImageToCloudinary, cleanupOrphanImage } from "@/services/imageUploadService";
+import { validatePickedImage } from "@/utils/imageValidator";
 import { parseApiError } from "@/utils/errorParser";
 import { useCacheInvalidationStore } from "@/store/useCacheInvalidationStore";
 import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
+import { useDemoSandboxStore } from "@/store/useDemoSandboxStore";
+import { isDemoRole, isDemoUser, assertNotDemoUserMutation } from "@/utils/roleUtils";
 import ImageCropperModal from "@/components/ImageCropperModal";
 import CameraCaptureModal from "@/components/CameraCaptureModal";
 import DeactivateModal from "@/components/DeactivateModal";
 import FieldLabel, { FieldError } from "@/components/FieldLabel";
 
-interface Category extends LocalCategoryRow {}
+interface Category extends LocalCategoryRow { }
 interface Product extends LocalProductRow {
   CategoryName?: string;
   SupplierName?: string;
@@ -126,7 +130,17 @@ export default function ProductsTab({
 
   // Edit Product Modal State
   const [isProductEditModalVisible, setIsProductEditModalVisible] = useState(false);
-  const [editProductForm, setEditProductForm] = useState({
+  const [editProductForm, setEditProductForm] = useState<{
+    id: string;
+    name: string;
+    barcode: string;
+    price: string;
+    categoryId: string;
+    supplierId: string;
+    imageUrl: string;
+    imagePublicId: string | null;
+    lowStockThreshold: string;
+  }>({
     id: "",
     name: "",
     barcode: "",
@@ -134,8 +148,12 @@ export default function ProductsTab({
     categoryId: "",
     supplierId: "",
     imageUrl: "",
+    imagePublicId: null,
     lowStockThreshold: "10",
   });
+  const [originalImageUrl, setOriginalImageUrl] = useState<string>("");
+  const [originalImagePublicId, setOriginalImagePublicId] = useState<string | null>(null);
+  const [isUploadingEditImage, setIsUploadingEditImage] = useState<boolean>(false);
   const [editErrors, setEditErrors] = useState<{ name?: string; price?: string; lowStockThreshold?: string }>({});
 
   const [isScannerVisible, setIsScannerVisible] = useState(false);
@@ -144,7 +162,8 @@ export default function ProductsTab({
   const { user } = useAuthStore();
   const role = user?.role || "";
 
-  const canEditStock = ["Admin", "Manager", "WarehouseStaff"].includes(role);
+  const isDemo = isDemoRole(role);
+  const canEditStock = ["Admin", "Manager", "WarehouseStaff", "DemoUser", "Demo"].includes(role);
   const canManageProducts = ["Admin", "Manager"].includes(role);
 
   const handleScanSuccess = (barcode: string) => {
@@ -184,6 +203,7 @@ export default function ProductsTab({
 
       const enrichedProducts = productsData.map((p) => ({
         ...p,
+        StockQuantity: isDemo ? useDemoSandboxStore.getState().getEffectiveStock(p.Id, p.StockQuantity) : p.StockQuantity,
         CategoryName: categoryMap.get(p.CategoryId) || "Không xác định",
         SupplierName: p.SupplierId ? supplierMap.get(p.SupplierId) : undefined,
       }));
@@ -256,6 +276,37 @@ export default function ProductsTab({
       return;
     }
 
+    if (isDemo) {
+      isSubmittingStockRef.current = true;
+      setIsSubmittingStock(true);
+      setAdjustmentError(null);
+      try {
+        await useDemoSandboxStore.getState().createSandboxStockAdjustment({
+          productId: String(selectedProduct.Id),
+          delta: diff,
+          reason: trimmedReason,
+          beforeQty: selectedProduct.StockQuantity,
+          afterQty: stockValue,
+        });
+
+        SetIsEditModalVisible(false);
+        await loadData();
+
+        useModalStore.getState().showModal({
+          title: "Thành công",
+          message: `Đã điều chỉnh tồn kho thử nghiệm sản phẩm "${selectedProduct.Name}" (${diff > 0 ? "+" : ""}${diff}).`,
+          type: "success",
+        });
+        return;
+      } catch (error: any) {
+        setAdjustmentError(error?.message || "Lỗi khi lưu điều chỉnh tồn kho sandbox");
+        return;
+      } finally {
+        isSubmittingStockRef.current = false;
+        setIsSubmittingStock(false);
+      }
+    }
+
     isSubmittingStockRef.current = true;
     setIsSubmittingStock(true);
     setAdjustmentError(null);
@@ -305,6 +356,14 @@ export default function ProductsTab({
 
   const handleConfirmDeactivate = async (reason: string) => {
     if (!deactivateTarget) return;
+    if (isDemo) {
+      useModalStore.getState().showModal({
+        title: "Chế độ trải nghiệm",
+        message: "Tài khoản trải nghiệm không được phép ngừng kinh doanh sản phẩm.",
+        type: "warning"
+      });
+      return;
+    }
     setIsDeactivating(true);
     try {
       await apiClient.put(`/Products/${deactivateTarget.Id}/deactivate`, { reason });
@@ -331,6 +390,14 @@ export default function ProductsTab({
   };
 
   const handleReactivateProduct = async (product: Product) => {
+    if (isDemo) {
+      useModalStore.getState().showModal({
+        title: "Chế độ trải nghiệm",
+        message: "Tài khoản trải nghiệm không được phép kích hoạt lại sản phẩm.",
+        type: "warning"
+      });
+      return;
+    }
     try {
       useModalStore.getState().setLoading(true);
       await apiClient.put(`/Products/${product.Id}/reactivate`);
@@ -355,6 +422,14 @@ export default function ProductsTab({
   };
 
   const handleDeleteProduct = (product: Product) => {
+    if (isDemo) {
+      useModalStore.getState().showModal({
+        title: "Chế độ trải nghiệm",
+        message: "Tài khoản trải nghiệm không được phép xóa sản phẩm.",
+        type: "warning"
+      });
+      return;
+    }
     useModalStore.getState().showModal({
       title: "Xóa vĩnh viễn sản phẩm",
       message: `Bạn có chắc chắn muốn xóa vĩnh viễn sản phẩm "${product.Name}"? Hành động này không thể hoàn tác nếu sản phẩm chưa phát sinh chứng từ.`,
@@ -407,6 +482,8 @@ export default function ProductsTab({
   }, [targetProductId, targetBarcode, focusField, products]);
 
   const handleOpenProductEdit = (product: Product) => {
+    const imgUrl = product.ImageUrl || "";
+    const imgPublicId = product.ImagePublicId || null;
     setEditProductForm({
       id: product.Id,
       name: product.Name,
@@ -414,14 +491,83 @@ export default function ProductsTab({
       price: product.Price.toString(),
       categoryId: product.CategoryId ? product.CategoryId.toString() : "",
       supplierId: product.SupplierId ? product.SupplierId.toString() : "",
-      imageUrl: product.ImageUrl || "",
+      imageUrl: imgUrl,
+      imagePublicId: imgPublicId,
       lowStockThreshold: (product.LowStockThreshold !== undefined && product.LowStockThreshold !== null) ? product.LowStockThreshold.toString() : "10",
     });
+    setOriginalImageUrl(imgUrl);
+    setOriginalImagePublicId(imgPublicId);
     setEditErrors({});
     setIsProductEditModalVisible(true);
   };
 
+  const handleDeleteProductImage = () => {
+    if (isDemo) {
+      useModalStore.getState().showModal({
+        title: "Chế độ trải nghiệm",
+        message: "Tài khoản trải nghiệm không được phép xóa ảnh sản phẩm.",
+        type: "warning"
+      });
+      return;
+    }
+    useModalStore.getState().showModal({
+      title: "Xóa ảnh sản phẩm",
+      message: "Bạn có chắc chắn muốn xóa ảnh của sản phẩm này? Thao tác này sẽ xóa vĩnh viễn ảnh khỏi máy chủ và cơ sở dữ liệu.",
+      type: "confirm",
+      destructive: true,
+      confirmText: "Xóa vĩnh viễn ảnh",
+      cancelText: "Hủy",
+      onConfirm: async () => {
+        if (originalImageUrl && editProductForm.id) {
+          try {
+            useModalStore.getState().setLoading(true);
+            await apiClient.delete(`/Products/${editProductForm.id}/image`);
+
+            const db = await getDBConnection();
+            await db.runAsync(
+              "UPDATE LocalProducts SET ImageUrl = NULL, ImagePublicId = NULL WHERE Id = ?",
+              [editProductForm.id.toString()]
+            );
+
+            useCacheInvalidationStore.getState().invalidateProduct();
+            useCacheInvalidationStore.getState().invalidatePos();
+            await loadData();
+
+            setEditProductForm(prev => ({ ...prev, imageUrl: "", imagePublicId: null }));
+            setOriginalImageUrl("");
+            setOriginalImagePublicId(null);
+
+            useModalStore.getState().showModal({
+              title: "Thành công",
+              message: "Đã xóa ảnh sản phẩm thành công.",
+              type: "success"
+            });
+          } catch (e: any) {
+            const apiError = parseApiError(e);
+            useModalStore.getState().showModal({
+              title: apiError.title || "Lỗi xóa ảnh",
+              message: apiError.message || "Không thể xóa ảnh sản phẩm trên máy chủ.",
+              type: "error"
+            });
+          } finally {
+            useModalStore.getState().setLoading(false);
+          }
+        } else {
+          setEditProductForm(prev => ({ ...prev, imageUrl: "", imagePublicId: null }));
+        }
+      }
+    });
+  };
+
   const handleSaveProductEdit = async () => {
+    if (isDemo) {
+      useModalStore.getState().showModal({
+        title: "Chế độ trải nghiệm",
+        message: "Tài khoản trải nghiệm không được phép sửa đổi thông tin sản phẩm master data.",
+        type: "warning"
+      });
+      return;
+    }
     const errors: typeof editErrors = {};
     if (!editProductForm.name.trim()) {
       errors.name = "Vui lòng nhập tên sản phẩm.";
@@ -443,13 +589,36 @@ export default function ProductsTab({
     setEditErrors({});
 
     setIsLoading(true);
+    setIsUploadingEditImage(true);
+    let newlyUploadedPublicId: string | null = null;
+
     try {
-      let finalImageUrl = editProductForm.imageUrl;
-      if (editProductForm.imageUrl && (editProductForm.imageUrl.startsWith("file:") || editProductForm.imageUrl.startsWith("blob:") || editProductForm.imageUrl.startsWith("data:"))) {
-        const uploadResult = await uploadImageToCloudinary(editProductForm.imageUrl);
-        if (uploadResult.isSuccess && uploadResult.url) {
-          finalImageUrl = uploadResult.url;
+      let finalImageUrl: string | null = null;
+      let finalImagePublicId: string | null = editProductForm.imagePublicId || originalImagePublicId || null;
+
+      if (editProductForm.imageUrl) {
+        if (editProductForm.imageUrl.startsWith("file:") || editProductForm.imageUrl.startsWith("blob:") || editProductForm.imageUrl.startsWith("data:")) {
+          const uploadResult = await uploadImageToCloudinary(editProductForm.imageUrl);
+          if (uploadResult.isSuccess && uploadResult.url) {
+            finalImageUrl = uploadResult.url;
+            finalImagePublicId = uploadResult.publicId || null;
+            newlyUploadedPublicId = uploadResult.publicId || null;
+          } else {
+            setIsLoading(false);
+            setIsUploadingEditImage(false);
+            useModalStore.getState().showModal({
+              title: "Lỗi tải ảnh",
+              message: uploadResult.error || "Không thể tải ảnh sản phẩm lên máy chủ. Vui lòng kiểm tra lại kết nối mạng.",
+              type: "error"
+            });
+            return;
+          }
+        } else if (editProductForm.imageUrl.trim()) {
+          finalImageUrl = editProductForm.imageUrl.trim();
         }
+      } else {
+        finalImageUrl = null;
+        finalImagePublicId = null;
       }
 
       const payload = {
@@ -458,18 +627,30 @@ export default function ProductsTab({
         price: parseFloat(editProductForm.price),
         categoryId: editProductForm.categoryId ? parseInt(editProductForm.categoryId, 10) : null,
         supplierId: editProductForm.supplierId ? parseInt(editProductForm.supplierId, 10) : null,
-        imageUrl: finalImageUrl.trim() || null,
+        imageUrl: finalImageUrl,
+        imagePublicId: finalImagePublicId,
         isActive: true,
         lowStockThreshold: thresholdVal,
         isSalePriceConfigured: true,
       };
 
-      await apiClient.put(`/Products/${editProductForm.id}`, payload);
+      try {
+        await apiClient.put(`/Products/${editProductForm.id}`, payload);
+      } catch (putErr) {
+        if (newlyUploadedPublicId) {
+          try {
+            await cleanupOrphanImage(newlyUploadedPublicId);
+          } catch (cleanupErr) {
+            console.warn("Lỗi dọn asset mồ côi:", cleanupErr);
+          }
+        }
+        throw putErr;
+      }
 
       const db = await getDBConnection();
       await db.runAsync(
-        "UPDATE LocalProducts SET Name = ?, Barcode = ?, Price = ?, CategoryId = ?, SupplierId = ?, ImageUrl = ?, LowStockThreshold = ?, IsSalePriceConfigured = 1 WHERE Id = ?",
-        [payload.name, payload.barcode, payload.price, payload.categoryId || 1, payload.supplierId, payload.imageUrl, payload.lowStockThreshold, editProductForm.id]
+        "UPDATE LocalProducts SET Name = ?, Barcode = ?, Price = ?, CategoryId = ?, SupplierId = ?, ImageUrl = ?, ImagePublicId = ?, LowStockThreshold = ?, IsSalePriceConfigured = 1 WHERE Id = ?",
+        [payload.name, payload.barcode, payload.price, payload.categoryId || 1, payload.supplierId, payload.imageUrl, payload.imagePublicId, payload.lowStockThreshold, editProductForm.id]
       );
 
       setIsProductEditModalVisible(false);
@@ -491,10 +672,12 @@ export default function ProductsTab({
       });
     } finally {
       setIsLoading(false);
+      setIsUploadingEditImage(false);
     }
   };
 
-  const handlePickImage = async (mode: 'camera' | 'library' = 'library') => {
+  const handlePickImage = async (mode: 'camera' | 'library' = 'library', target: 'new' | 'edit' = 'new') => {
+    setCropperTarget(target);
     try {
       if (mode === 'camera') {
         if (Platform.OS === 'web') {
@@ -513,32 +696,77 @@ export default function ProductsTab({
         const result = await ImagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing: false,
-          quality: 0.9,
+          quality: 1.0,
         });
-        if (!result.canceled && result.assets && result.assets.length > 0) {
-          setCropperRawUri(result.assets[0].uri);
-          setCropperTarget("new");
-          setCropperVisible(true);
+        if (result.canceled || !result.assets || result.assets.length === 0) {
+          return;
         }
+        const asset = result.assets[0];
+        const validation = await validatePickedImage(asset.uri, {
+          mimeType: asset.mimeType,
+          fileSize: asset.fileSize,
+          width: asset.width,
+          height: asset.height,
+          fileName: asset.fileName,
+        });
+        if (!validation.isValid) {
+          useModalStore.getState().showModal({
+            title: "Định dạng không hợp lệ",
+            message: validation.error || "Ảnh không hợp lệ. Vui lòng chọn JPG, PNG hoặc WebP.",
+            type: "error"
+          });
+          return;
+        }
+        setCropperRawUri(asset.uri);
+        setCropperVisible(true);
       } else {
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsEditing: false,
-          quality: 0.9,
+          quality: 1.0,
         });
-        if (!result.canceled && result.assets && result.assets.length > 0) {
-          setCropperRawUri(result.assets[0].uri);
-          setCropperTarget("new");
-          setCropperVisible(true);
+        if (result.canceled || !result.assets || result.assets.length === 0) {
+          return;
         }
+        const asset = result.assets[0];
+        const validation = await validatePickedImage(asset.uri, {
+          mimeType: asset.mimeType,
+          fileSize: asset.fileSize,
+          width: asset.width,
+          height: asset.height,
+          fileName: asset.fileName,
+        });
+        if (!validation.isValid) {
+          useModalStore.getState().showModal({
+            title: "Định dạng không hợp lệ",
+            message: validation.error || "Ảnh không hợp lệ. Vui lòng chọn JPG, PNG hoặc WebP.",
+            type: "error"
+          });
+          return;
+        }
+        setCropperRawUri(asset.uri);
+        setCropperVisible(true);
       }
     } catch (err: any) {
       console.warn("Lỗi chọn ảnh:", err);
+      useModalStore.getState().showModal({
+        title: "Lỗi chọn ảnh",
+        message: "Không thể đọc file ảnh. Vui lòng chọn file khác.",
+        type: "error"
+      });
     }
   };
 
   // Section 3: INLINE VALIDATION FOR ADD PRODUCT
   const handleAddProduct = async () => {
+    if (isDemo) {
+      useModalStore.getState().showModal({
+        title: "Chế độ trải nghiệm",
+        message: "Tài khoản trải nghiệm không được phép thêm sản phẩm mới vào danh mục chính.",
+        type: "warning"
+      });
+      return;
+    }
     const errors: typeof formErrors = {};
     const trimmedName = newProduct.name.trim();
     if (!trimmedName) {
@@ -599,20 +827,25 @@ export default function ProductsTab({
     setFormErrors({});
 
     setIsLoading(true);
+    let newlyUploadedPublicId: string | null = null;
     try {
       let finalImageUrl = "";
+      let finalImagePublicId: string | null = null;
+
       if (newProduct.imageUrl.startsWith("file:") || newProduct.imageUrl.startsWith("blob:") || newProduct.imageUrl.startsWith("data:")) {
         const uploadResult = await uploadImageToCloudinary(newProduct.imageUrl);
-        if (!uploadResult.isSuccess) {
+        if (!uploadResult.isSuccess || !uploadResult.url) {
           setIsLoading(false);
           useModalStore.getState().showModal({
             title: "Lỗi tải ảnh",
-            message: "Không thể tải ảnh sản phẩm lên máy chủ. Vui lòng thử lại.",
+            message: uploadResult.error || "Không thể tải ảnh sản phẩm lên máy chủ. Vui lòng thử lại.",
             type: "error"
           });
           return;
         }
-        finalImageUrl = uploadResult.url || "";
+        finalImageUrl = uploadResult.url;
+        finalImagePublicId = uploadResult.publicId || null;
+        newlyUploadedPublicId = uploadResult.publicId || null;
       } else {
         finalImageUrl = newProduct.imageUrl.trim();
       }
@@ -628,11 +861,25 @@ export default function ProductsTab({
         costPrice: costPriceVal,
         isActive: true,
         imageUrl: finalImageUrl,
+        imagePublicId: finalImagePublicId,
         lowStockThreshold: thresholdVal,
         isSalePriceConfigured: true,
       };
 
-      const createRes = await apiClient.post('/Products', payload);
+      let createRes: any;
+      try {
+        createRes = await apiClient.post('/Products', payload);
+      } catch (postErr) {
+        if (newlyUploadedPublicId) {
+          try {
+            await cleanupOrphanImage(newlyUploadedPublicId);
+          } catch (cleanupErr) {
+            console.warn("Lỗi dọn asset mồ côi:", cleanupErr);
+          }
+        }
+        throw postErr;
+      }
+
       let serverId: number;
       let serverProduct: any = null;
 
@@ -655,7 +902,8 @@ export default function ProductsTab({
         serverProduct.imageUrl || serverProduct.ImageUrl || payload.imageUrl || undefined,
         serverProduct.supplierId || serverProduct.SupplierId || payload.supplierId,
         thresholdVal,
-        true
+        true,
+        serverProduct.imagePublicId || serverProduct.ImagePublicId || payload.imagePublicId || undefined
       );
 
       let inventorySuccess = true;
@@ -801,11 +1049,31 @@ export default function ProductsTab({
           return (
             <View className={`p-3 sm:p-4 mb-3 sm:mb-4 border-2 border-black flex flex-row items-center ${isInactive ? 'bg-gray-100 opacity-75' : 'bg-white'}`}>
               <View className="relative">
-                <Image
-                  source={{ uri: item.ImageUrl || 'https://via.placeholder.com/800x800.png?text=POS' }}
-                  className="w-20 h-20 sm:w-24 sm:h-24 bg-gray-100"
-                  resizeMode="cover"
-                />
+                {item.ImageUrl ? (
+                  <View
+                    style={{
+                      aspectRatio: 1,
+                      backgroundColor: "#FFFFFF",
+                      overflow: "hidden",
+                      justifyContent: "center",
+                      alignItems: "center",
+                      borderWidth: 1,
+                      borderColor: "#000000",
+                    }}
+                    className="w-20 h-20 sm:w-24 sm:h-24"
+                  >
+                    <Image
+                      source={{ uri: item.ImageUrl }}
+                      style={{ width: "100%", height: "100%" }}
+                      resizeMode="contain"
+                    />
+                  </View>
+                ) : (
+                  <View className="w-20 h-20 sm:w-24 sm:h-24 bg-white border border-gray-300 items-center justify-center">
+                    <Ionicons name="image-outline" size={26} color="#9ca3af" />
+                    <Text style={{ fontSize: 9, color: '#9ca3af', marginTop: 2, fontWeight: 'bold' }}>CHƯA CÓ ẢNH</Text>
+                  </View>
+                )}
                 {isOutOfStock && !isInactive && (
                   <View className="absolute inset-0 bg-white/70 items-center justify-center">
                     <View className="bg-black px-2 py-1">
@@ -919,7 +1187,13 @@ export default function ProductsTab({
             </View>
             {selectedProduct && (
               <View className="border-2 border-black p-4 mb-4 flex-row items-center bg-gray-50">
-                <Image source={{ uri: selectedProduct.ImageUrl }} className="w-14 h-14 mr-3 bg-white" />
+                {selectedProduct.ImageUrl ? (
+                  <Image source={{ uri: selectedProduct.ImageUrl }} className="w-14 h-14 mr-3 bg-white" resizeMode="contain" />
+                ) : (
+                  <View className="w-14 h-14 mr-3 bg-white border border-gray-300 items-center justify-center">
+                    <Ionicons name="cube-outline" size={24} color="#6b7280" />
+                  </View>
+                )}
                 <View className="flex-1">
                   <Text className="font-bold text-black text-sm mb-0.5">{selectedProduct.Name}</Text>
                   <Text style={{ fontSize: 10, color: '#525252', letterSpacing: 1 }}>MÃ: {selectedProduct.Barcode}</Text>
@@ -1037,7 +1311,7 @@ export default function ProductsTab({
                 <View className="flex-row items-center">
                   {newProduct.imageUrl ? (
                     <View className="relative mr-4">
-                      <Image source={{ uri: newProduct.imageUrl }} className="w-24 h-24 border-2 border-black bg-white" resizeMode="cover" />
+                      <Image source={{ uri: newProduct.imageUrl }} className="w-24 h-24 border-2 border-black bg-white" resizeMode="contain" />
                       <TouchableOpacity
                         onPress={() => {
                           setNewProduct(prev => ({ ...prev, imageUrl: "" }));
@@ -1246,6 +1520,131 @@ export default function ProductsTab({
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* QUẢN LÝ ẢNH SẢN PHẨM */}
+              <View className="mb-4">
+                <FieldLabel label="Ảnh sản phẩm" />
+                <View className="border-2 border-black p-3 bg-gray-50 flex-col items-center">
+                  {editProductForm.imageUrl ? (
+                    <View className="items-center w-full">
+                      <View
+                        style={{
+                          width: 144,
+                          height: 144,
+                          aspectRatio: 1,
+                          backgroundColor: "#FFFFFF",
+                          overflow: "hidden",
+                          justifyContent: "center",
+                          alignItems: "center",
+                        }}
+                        className="relative border-2 border-black"
+                      >
+                        <Image
+                          source={{ uri: editProductForm.imageUrl }}
+                          style={{ width: "100%", height: "100%" }}
+                          resizeMode="contain"
+                        />
+                        {editProductForm.imageUrl !== originalImageUrl && (
+                          <View className="absolute top-1 left-1 bg-amber-600 px-2 py-0.5 z-10">
+                            <Text className="text-white font-bold text-[9px] uppercase">Chưa lưu</Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <View className="flex-row flex-wrap gap-2 mt-3 justify-center w-full">
+                        <TouchableOpacity
+                          disabled={isLoading || isUploadingEditImage}
+                          onPress={() => handlePickImage('library', 'edit')}
+                          className="px-3 py-2 bg-black flex-row items-center"
+                        >
+                          <Ionicons name="images-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
+                          <Text className="text-white font-bold text-xs uppercase">Thay ảnh</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          disabled={isLoading || isUploadingEditImage}
+                          onPress={() => handlePickImage('camera', 'edit')}
+                          className="px-3 py-2 bg-black flex-row items-center"
+                        >
+                          <Ionicons name="camera-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
+                          <Text className="text-white font-bold text-xs uppercase">Chụp ảnh</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          disabled={isLoading || isUploadingEditImage}
+                          onPress={handleDeleteProductImage}
+                          className="px-3 py-2 border-2 border-red-600 bg-white flex-row items-center"
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#dc2626" style={{ marginRight: 4 }} />
+                          <Text className="text-red-600 font-bold text-xs uppercase">Xóa ảnh</Text>
+                        </TouchableOpacity>
+
+                        {editProductForm.imageUrl !== originalImageUrl && (
+                          <TouchableOpacity
+                            disabled={isLoading || isUploadingEditImage}
+                            onPress={() => setEditProductForm(prev => ({
+                              ...prev,
+                              imageUrl: originalImageUrl,
+                              imagePublicId: originalImagePublicId
+                            }))}
+                            className="px-3 py-2 border-2 border-gray-400 bg-white flex-row items-center"
+                          >
+                            <Ionicons name="arrow-undo-outline" size={14} color="#000" style={{ marginRight: 4 }} />
+                            <Text className="text-black font-bold text-xs uppercase">Hủy ảnh mới</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  ) : (
+                    <View className="items-center py-4 w-full">
+                      <View className="w-24 h-24 border-2 border-dashed border-gray-400 items-center justify-center bg-white mb-3">
+                        <Ionicons name="image-outline" size={36} color="#9ca3af" />
+                        <Text className="text-[10px] text-gray-400 font-bold mt-1">Chưa có ảnh</Text>
+                      </View>
+
+                      <View className="flex-row gap-2">
+                        <TouchableOpacity
+                          disabled={isLoading || isUploadingEditImage}
+                          onPress={() => handlePickImage('library', 'edit')}
+                          className="px-4 py-2 bg-black flex-row items-center"
+                        >
+                          <Ionicons name="images-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
+                          <Text className="text-white font-bold text-xs uppercase">Chọn ảnh</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          disabled={isLoading || isUploadingEditImage}
+                          onPress={() => handlePickImage('camera', 'edit')}
+                          className="px-4 py-2 border-2 border-black bg-white flex-row items-center"
+                        >
+                          <Ionicons name="camera-outline" size={14} color="#000" style={{ marginRight: 4 }} />
+                          <Text className="text-black font-bold text-xs uppercase">Chụp ảnh</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {originalImageUrl !== "" && (
+                        <TouchableOpacity
+                          disabled={isLoading || isUploadingEditImage}
+                          onPress={() => setEditProductForm(prev => ({
+                            ...prev,
+                            imageUrl: originalImageUrl,
+                            imagePublicId: originalImagePublicId
+                          }))}
+                          className="mt-2 px-3 py-1.5 border border-gray-400 bg-white flex-row items-center"
+                        >
+                          <Ionicons name="arrow-undo-outline" size={12} color="#000" style={{ marginRight: 4 }} />
+                          <Text className="text-black font-bold text-[11px] uppercase">Khôi phục ảnh gốc</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )}
+                  {isUploadingEditImage && (
+                    <View className="flex-row items-center mt-2">
+                      <ActivityIndicator size="small" color="#000" style={{ marginRight: 6 }} />
+                      <Text className="text-xs text-gray-600 font-semibold">Đang tải ảnh lên...</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+
               <View className="mb-4">
                 <CustomInput
                   label="Tên sản phẩm *"
@@ -1351,8 +1750,17 @@ export default function ProductsTab({
       {/* Web / Mobile Camera Capture Modal */}
       <CameraCaptureModal
         visible={cameraVisible}
-        onCapture={(capturedUri) => {
+        onCapture={async (capturedUri) => {
           setCameraVisible(false);
+          const validation = await validatePickedImage(capturedUri);
+          if (!validation.isValid) {
+            useModalStore.getState().showModal({
+              title: "Ảnh không hợp lệ",
+              message: validation.error || "Không thể sử dụng ảnh chụp này.",
+              type: "error"
+            });
+            return;
+          }
           setCropperRawUri(capturedUri);
           setCropperTarget("new");
           setCropperVisible(true);
@@ -1378,7 +1786,7 @@ export default function ProductsTab({
         onCancel={() => setCropperVisible(false)}
         onReplace={() => {
           setCropperVisible(false);
-          handlePickImage('library');
+          handlePickImage('library', cropperTarget);
         }}
       />
 

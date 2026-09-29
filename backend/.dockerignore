@@ -8,7 +8,6 @@
 # ─── Configuration files with potential secrets ───
 **/appsettings.json
 **/appsettings.Development.json
-**/appsettings.Production.json
 # Keep example config for reference
 !**/appsettings.example.json
 

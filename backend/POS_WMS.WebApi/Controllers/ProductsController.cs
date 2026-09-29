@@ -33,6 +33,7 @@ namespace POS_WMS.WebApi.Controllers
         private readonly IConfiguration _config;
         private readonly ApplicationDbContext _context;
         private readonly IAuditLogService _auditLogService;
+        private readonly ILogger<ProductsController> _logger;
 
         public ProductsController(
             IGenericRepository<Product> productRepository,
@@ -43,7 +44,8 @@ namespace POS_WMS.WebApi.Controllers
             IUnitOfWork unitOfWork,
             IConfiguration config,
             ApplicationDbContext context,
-            IAuditLogService auditLogService)
+            IAuditLogService auditLogService,
+            ILogger<ProductsController> logger)
         {
             _productRepository = productRepository;
             _categoryRepository = categoryRepository;
@@ -54,6 +56,7 @@ namespace POS_WMS.WebApi.Controllers
             _config = config;
             _context = context;
             _auditLogService = auditLogService;
+            _logger = logger;
         }
 
         [HttpGet]
@@ -69,6 +72,7 @@ namespace POS_WMS.WebApi.Controllers
                     query = query.Where(p => p.IsActive);
                 }
 
+                bool canViewCostPrice = User.IsInRole("Admin") || User.IsInRole("Manager");
                 var products = await query.ToListAsync();
                 var productDtos = products.Select(p => new ProductDto
                 {
@@ -79,9 +83,10 @@ namespace POS_WMS.WebApi.Controllers
                     Name = p.Name,
                     Barcode = p.Barcode,
                     Price = p.Price,
-                    CostPrice = p.CostPrice,
+                    CostPrice = canViewCostPrice ? p.CostPrice : null,
                     IsActive = p.IsActive,
                     ImageUrl = p.ImageUrl,
+                    ImagePublicId = p.ImagePublicId,
                     DeactivatedAt = p.DeactivatedAt,
                     DeactivationReason = p.DeactivationReason,
                     LowStockThreshold = p.LowStockThreshold,
@@ -107,6 +112,7 @@ namespace POS_WMS.WebApi.Controllers
                     return NotFound(ApiResponse<ProductDto>.Failure("Không tìm thấy sản phẩm", "ERR_NOT_FOUND"));
                 }
 
+                bool canViewCostPrice = User.IsInRole("Admin") || User.IsInRole("Manager");
                 var productDto = new ProductDto
                 {
                     Id = product.Id,
@@ -116,9 +122,10 @@ namespace POS_WMS.WebApi.Controllers
                     Name = product.Name,
                     Barcode = product.Barcode,
                     Price = product.Price,
-                    CostPrice = product.CostPrice,
+                    CostPrice = canViewCostPrice ? product.CostPrice : null,
                     IsActive = product.IsActive,
                     ImageUrl = product.ImageUrl,
+                    ImagePublicId = product.ImagePublicId,
                     DeactivatedAt = product.DeactivatedAt,
                     DeactivationReason = product.DeactivationReason,
                     LowStockThreshold = product.LowStockThreshold,
@@ -197,7 +204,8 @@ namespace POS_WMS.WebApi.Controllers
                     Price = request.Price,
                     CostPrice = request.CostPrice,
                     IsActive = true,
-                    ImageUrl = request.ImageUrl,
+                    ImageUrl = string.IsNullOrWhiteSpace(request.ImageUrl) ? null : request.ImageUrl.Trim(),
+                    ImagePublicId = string.IsNullOrWhiteSpace(request.ImagePublicId) ? null : request.ImagePublicId.Trim(),
                     LowStockThreshold = request.LowStockThreshold >= 0 ? request.LowStockThreshold : 10,
                     IsSalePriceConfigured = request.IsSalePriceConfigured
                 };
@@ -221,11 +229,13 @@ namespace POS_WMS.WebApi.Controllers
             }
             catch (DbUpdateException dbEx)
             {
-                return Conflict(ApiResponse<int>.Failure($"Xung đột dữ liệu sản phẩm: {dbEx.InnerException?.Message ?? dbEx.Message}", "PRODUCT_CONFLICT"));
+                _logger.LogError(dbEx, "Lỗi cập nhật CSDL khi tạo sản phẩm");
+                return Conflict(ApiResponse<int>.Failure("Không thể lưu sản phẩm do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "PRODUCT_CONFLICT"));
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<int>.Failure($"Lỗi hệ thống: {ex.Message}", "ERR_CREATE"));
+                _logger.LogError(ex, "Lỗi khi tạo sản phẩm");
+                return StatusCode(500, ApiResponse<int>.Failure("Hệ thống gặp sự cố khi tạo sản phẩm. Vui lòng thử lại sau.", "ERR_CREATE"));
             }
         }
 
@@ -284,6 +294,10 @@ namespace POS_WMS.WebApi.Controllers
                 if (request.LowStockThreshold < 0)
                     return BadRequest(ApiResponse<bool>.Failure("Ngưỡng sắp hết không được nhỏ hơn 0.", "PRODUCT_THRESHOLD_INVALID"));
 
+                string? oldPublicId = product.ImagePublicId;
+                string? newImageUrl = string.IsNullOrWhiteSpace(request.ImageUrl) ? null : request.ImageUrl.Trim();
+                string? newPublicId = string.IsNullOrWhiteSpace(request.ImagePublicId) ? null : request.ImagePublicId.Trim();
+
                 product.CategoryId = targetCategoryId;
                 product.Name = POS_WMS.Domain.Common.StringNormalizationHelper.NormalizeDisplayName(request.Name);
                 product.NormalizedName = normName;
@@ -292,11 +306,27 @@ namespace POS_WMS.WebApi.Controllers
                 product.CostPrice = request.CostPrice;
                 product.LowStockThreshold = request.LowStockThreshold >= 0 ? request.LowStockThreshold : product.LowStockThreshold;
                 product.IsSalePriceConfigured = request.IsSalePriceConfigured;
-                if (!string.IsNullOrWhiteSpace(request.ImageUrl))
-                    product.ImageUrl = request.ImageUrl;
+                product.ImageUrl = newImageUrl;
+                product.ImagePublicId = newPublicId;
 
                 _productRepository.Update(product);
                 await _unitOfWork.SaveChangesAsync();
+
+                // Clean up replaced or removed old asset ONLY AFTER database save succeeds
+                if (!string.IsNullOrWhiteSpace(oldPublicId) && oldPublicId != newPublicId)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await DestroyCloudinaryAssetAsync(oldPublicId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Tự động xóa ảnh cũ {PublicId} thất bại sau khi cập nhật sản phẩm {ProductId}.", oldPublicId, product.Id);
+                        }
+                    });
+                }
 
                 var adminId = int.Parse(User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "0");
                 var adminName = User?.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "Unknown";
@@ -306,11 +336,13 @@ namespace POS_WMS.WebApi.Controllers
             }
             catch (DbUpdateException dbEx)
             {
-                return Conflict(ApiResponse<bool>.Failure($"Xung đột cập nhật dữ liệu: {dbEx.InnerException?.Message ?? dbEx.Message}", "PRODUCT_CONFLICT"));
+                _logger.LogError(dbEx, "Lỗi cập nhật CSDL khi sửa sản phẩm");
+                return Conflict(ApiResponse<bool>.Failure("Không thể lưu sản phẩm do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "PRODUCT_CONFLICT"));
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống: {ex.Message}"));
+                _logger.LogError(ex, "Lỗi khi cập nhật sản phẩm");
+                return StatusCode(500, ApiResponse<bool>.Failure("Hệ thống gặp sự cố khi cập nhật sản phẩm. Vui lòng thử lại sau."));
             }
         }
 
@@ -364,7 +396,7 @@ namespace POS_WMS.WebApi.Controllers
                 var barcodeExists = await _context.Products.AnyAsync(p => p.Barcode == product.Barcode && p.Id != id);
                 if (barcodeExists)
                 {
-                    return Conflict(ApiResponse<bool>.Failure("Không thể kích hoạt lại: Mã vạch đã bị xung đột với sản phẩm khác.", "PRODUCT_BARCODE_ALREADY_EXISTS"));
+                    return Conflict(ApiResponse<bool>.Failure("Không thể kích hoạt lại: Mã vạch đã được sử dụng bởi sản phẩm khác.", "PRODUCT_BARCODE_ALREADY_EXISTS"));
                 }
 
                 var nameExists = await _context.Products.AnyAsync(p => p.NormalizedName == product.NormalizedName && p.CategoryId == product.CategoryId && p.Id != id);
@@ -437,6 +469,70 @@ namespace POS_WMS.WebApi.Controllers
             }
         }
 
+        [HttpDelete("{id}/image")]
+        [Authorize(Roles = "Admin,Manager")]
+        public async Task<IActionResult> DeleteProductImage(int id)
+        {
+            try
+            {
+                var product = await _productRepository.GetByIdAsync(id);
+                if (product == null)
+                    return NotFound(ApiResponse<bool>.Failure("Không tìm thấy sản phẩm", "ERR_NOT_FOUND"));
+
+                string? oldPublicId = product.ImagePublicId;
+                string? oldImageUrl = product.ImageUrl;
+
+                if (string.IsNullOrEmpty(oldImageUrl) && string.IsNullOrEmpty(oldPublicId))
+                {
+                    return Ok(ApiResponse<bool>.Success(true, "Sản phẩm hiện tại chưa có ảnh"));
+                }
+
+                // If asset has a managed publicId, destroy it on Cloudinary
+                if (!string.IsNullOrWhiteSpace(oldPublicId))
+                {
+                    bool destroyed = await DestroyCloudinaryAssetAsync(oldPublicId);
+                    if (!destroyed)
+                    {
+                        return StatusCode(500, ApiResponse<bool>.Failure("Không thể xóa ảnh trên máy chủ lưu trữ Cloudinary. Vui lòng thử lại sau.", "CLOUDINARY_DELETE_FAILED"));
+                    }
+                }
+
+                product.ImageUrl = null;
+                product.ImagePublicId = null;
+                _productRepository.Update(product);
+                await _unitOfWork.SaveChangesAsync();
+
+                var adminId = int.Parse(User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var adminName = User?.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "Unknown";
+                await _auditLogService.LogActionAsync(adminId, adminName, "PRODUCT_IMAGE_DELETED", "Product", product.Id.ToString(), $"Đã xóa ảnh sản phẩm: {product.Name} (PublicId: {oldPublicId ?? "Legacy"}) bởi {adminName}", "SUCCESS");
+
+                return Ok(ApiResponse<bool>.Success(true, "Xóa ảnh sản phẩm thành công"));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi hệ thống khi xóa ảnh: {ex.Message}"));
+            }
+        }
+
+        [HttpPost("cleanup-orphan-image")]
+        [Authorize(Roles = "Admin,Manager")]
+        public async Task<IActionResult> CleanupOrphanImage([FromBody] CleanupImageRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request?.PublicId))
+            {
+                return BadRequest(ApiResponse<bool>.Failure("PublicId không được để trống"));
+            }
+
+            bool isUsed = await _context.Products.AnyAsync(p => p.ImagePublicId == request.PublicId);
+            if (isUsed)
+            {
+                return BadRequest(ApiResponse<bool>.Failure("Không thể xóa ảnh đang được sử dụng bởi sản phẩm"));
+            }
+
+            bool destroyed = await DestroyCloudinaryAssetAsync(request.PublicId);
+            return Ok(ApiResponse<bool>.Success(destroyed));
+        }
+
         [HttpPost("upload-image")]
         [Authorize(Roles = "Admin,Manager")]
         public async Task<IActionResult> UploadImage(IFormFile file)
@@ -445,19 +541,40 @@ namespace POS_WMS.WebApi.Controllers
             {
                 if (file == null || file.Length == 0)
                 {
-                    return BadRequest(ApiResponse<string>.Failure("Không tìm thấy file ảnh"));
+                    return BadRequest(ApiResponse<ImageUploadResponseDto>.Failure("Không tìm thấy file ảnh"));
                 }
 
                 var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
                 var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
                 if (!allowedExtensions.Contains(ext))
                 {
-                    return BadRequest(ApiResponse<string>.Failure("Định dạng file không được hỗ trợ. Chỉ chấp nhận JPG, PNG, WEBP.", "INVALID_MIME"));
+                    return BadRequest(ApiResponse<ImageUploadResponseDto>.Failure("Định dạng file không được hỗ trợ. Chỉ chấp nhận JPG, PNG, WEBP.", "INVALID_MIME"));
                 }
 
-                if (file.Length > 10 * 1024 * 1024)
+                if (file.Length > 5 * 1024 * 1024)
                 {
-                    return BadRequest(ApiResponse<string>.Failure("Kích thước file ảnh tối đa là 10MB.", "FILE_TOO_LARGE"));
+                    return BadRequest(ApiResponse<ImageUploadResponseDto>.Failure("Dung lượng ảnh vượt quá giới hạn 5MB.", "FILE_TOO_LARGE"));
+                }
+
+                // Deep inspect file magic bytes (Prevent renamed executables / zip / corrupt files)
+                byte[] headerBytes = new byte[16];
+                using (var stream = file.OpenReadStream())
+                {
+                    int bytesRead = await stream.ReadAsync(headerBytes, 0, 16);
+                    if (bytesRead < 4)
+                    {
+                        return BadRequest(ApiResponse<ImageUploadResponseDto>.Failure("File ảnh không hợp lệ hoặc bị hỏng.", "INVALID_IMAGE"));
+                    }
+
+                    bool isJpeg = headerBytes[0] == 0xFF && headerBytes[1] == 0xD8 && headerBytes[2] == 0xFF;
+                    bool isPng = headerBytes[0] == 0x89 && headerBytes[1] == 0x50 && headerBytes[2] == 0x4E && headerBytes[3] == 0x47;
+                    bool isWebp = headerBytes[0] == 0x52 && headerBytes[1] == 0x49 && headerBytes[2] == 0x46 && headerBytes[3] == 0x46 &&
+                                 bytesRead >= 12 && headerBytes[8] == 0x57 && headerBytes[9] == 0x45 && headerBytes[10] == 0x42 && headerBytes[11] == 0x50;
+
+                    if (!isJpeg && !isPng && !isWebp)
+                    {
+                        return BadRequest(ApiResponse<ImageUploadResponseDto>.Failure("Nội dung file không đúng định dạng ảnh JPG, PNG hoặc WebP.", "INVALID_MAGIC_BYTES"));
+                    }
                 }
 
                 Account account = new Account(
@@ -467,26 +584,64 @@ namespace POS_WMS.WebApi.Controllers
                 );
                 Cloudinary cloudinary = new Cloudinary(account);
 
-                var uploadResult = new ImageUploadResult();
+                ImageUploadResult uploadResult;
                 using (var stream = file.OpenReadStream())
                 {
                     var uploadParams = new ImageUploadParams()
                     {
                         File = new FileDescription(file.FileName, stream),
-                        Transformation = new Transformation().Height(800).Width(800).Crop("fill").Gravity("auto")
+                        Folder = "pos_wms/products",
+                        UseFilename = false,
+                        UniqueFilename = true
                     };
                     uploadResult = await cloudinary.UploadAsync(uploadParams);
                 }
+
                 if (uploadResult.Error != null)
-                    return StatusCode(500, ApiResponse<string>.Failure($"Lỗi Cloudinary: {uploadResult.Error.Message}"));
+                {
+                    return StatusCode(500, ApiResponse<ImageUploadResponseDto>.Failure($"Lỗi Cloudinary: {uploadResult.Error.Message}"));
+                }
 
-                string imageUrl = uploadResult.SecureUrl.ToString();
+                var responseDto = new ImageUploadResponseDto
+                {
+                    SecureUrl = uploadResult.SecureUrl.ToString(),
+                    PublicId = uploadResult.PublicId,
+                    Width = uploadResult.Width,
+                    Height = uploadResult.Height,
+                    Format = uploadResult.Format,
+                    Bytes = uploadResult.Bytes
+                };
 
-                return Ok(ApiResponse<string>.Success(imageUrl, "Upload thành công"));
+                return Ok(ApiResponse<ImageUploadResponseDto>.Success(responseDto, "Upload thành công"));
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ApiResponse<string>.Failure($"Lỗi: {ex.Message}"));
+                return StatusCode(500, ApiResponse<ImageUploadResponseDto>.Failure($"Lỗi upload ảnh: {ex.Message}"));
+            }
+        }
+
+        private async Task<bool> DestroyCloudinaryAssetAsync(string publicId)
+        {
+            if (string.IsNullOrWhiteSpace(publicId)) return true;
+            try
+            {
+                Account account = new Account(
+                    _config["CloudinarySettings:CloudName"],
+                    _config["CloudinarySettings:ApiKey"],
+                    _config["CloudinarySettings:ApiSecret"]
+                );
+                Cloudinary cloudinary = new Cloudinary(account);
+                var destroyParams = new DeletionParams(publicId)
+                {
+                    ResourceType = ResourceType.Image
+                };
+                var result = await cloudinary.DestroyAsync(destroyParams);
+                return result.Result == "ok" || result.Result == "not found";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Lỗi khi gọi Cloudinary Destroy cho asset {PublicId}", publicId);
+                return false;
             }
         }
     }

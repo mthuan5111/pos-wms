@@ -17,6 +17,7 @@ import { getDBConnection, insertLocalGoodsReceipt } from "@/database/db";
 import { getServerOrders } from "@/services/orderApi";
 import { getServerReceipts } from "@/services/goodsReceiptApi";
 import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
+import { useDemoSandboxStore } from "@/store/useDemoSandboxStore";
 import { useFocusEffect, useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useModalStore } from "@/store/useModalStore";
@@ -24,6 +25,7 @@ import { useCacheInvalidationStore } from "@/store/useCacheInvalidationStore";
 import { formatVietnamDateTime } from "@/utils/timezone";
 import { generateSalesReceiptHtml, generateGoodsReceiptHtml } from "@/utils/printTemplates";
 import { printDocument } from "@/utils/printService";
+import { isDemoRole } from "@/utils/roleUtils";
 
 type TabType = "sales" | "imports";
 
@@ -110,6 +112,7 @@ export default function InvoiceScreen() {
   const { user } = useAuthStore();
   const role = user?.role || "";
   const route = useRoute<any>();
+  const isDemo = isDemoRole(role);
 
   const defaultTab: TabType = role === "WarehouseStaff" ? "imports" : "sales";
   const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
@@ -227,7 +230,7 @@ export default function InvoiceScreen() {
               quantity: d.Quantity,
               unitPrice: d.Price
             }));
-          } catch {}
+          } catch { }
 
           result.push({
             key: `offline:${lo.OfflineReferenceId}`,
@@ -242,6 +245,42 @@ export default function InvoiceScreen() {
             serverId: lo.ServerId || undefined,
             details: localDetails
           });
+        }
+
+        if (isDemo) {
+          const sessionId = await useDemoSandboxStore.getState().initSession();
+          const sOrders = await db.getAllAsync<any>(
+            "SELECT * FROM DemoSandboxOrders WHERE SessionId = ? ORDER BY CreatedAt DESC",
+            [sessionId]
+          );
+          for (const so of sOrders) {
+            let sDetails: any[] = [];
+            try {
+              const dRows = await db.getAllAsync<any>(
+                "SELECT ProductName, Quantity, Price, Price as UnitPrice FROM DemoSandboxOrderDetails WHERE OfflineReferenceId = ?",
+                [so.OfflineReferenceId]
+              );
+              sDetails = dRows.map(d => ({
+                productName: d.ProductName,
+                barcode: "",
+                quantity: d.Quantity,
+                unitPrice: d.Price ?? d.UnitPrice ?? 0,
+              }));
+            } catch { }
+
+            result.unshift({
+              key: `demo:${so.OfflineReferenceId}`,
+              id: so.OfflineReferenceId,
+              offlineId: so.OfflineReferenceId,
+              totalAmount: so.TotalAmount,
+              date: so.CreatedAt,
+              employee: "Khách Trải Nghiệm",
+              paymentMethod: String(so.PaymentMethod).toUpperCase().includes("QR") ? "Chuyển khoản QR (Sandbox)" : "Tiền mặt (Sandbox)",
+              status: "Trải nghiệm",
+              isSynced: false,
+              details: sDetails
+            });
+          }
         }
 
         result.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -313,7 +352,7 @@ export default function InvoiceScreen() {
               quantity: d.Quantity,
               costPrice: d.CostPrice
             }));
-          } catch {}
+          } catch { }
 
           receiptResult.push({
             key: `offline:${lr.OfflineReferenceId}`,
@@ -329,6 +368,43 @@ export default function InvoiceScreen() {
             serverId: lr.ServerId || undefined,
             details: localReceiptDetails
           });
+        }
+
+        if (isDemo) {
+          const sessionId = await useDemoSandboxStore.getState().initSession();
+          const sReceipts = await db.getAllAsync<any>(
+            "SELECT * FROM DemoSandboxGoodsReceipts WHERE SessionId = ? ORDER BY CreatedAt DESC",
+            [sessionId]
+          );
+          for (const sr of sReceipts) {
+            let sDetails: any[] = [];
+            try {
+              const dRows = await db.getAllAsync<any>(
+                "SELECT ProductName, Quantity, MockCostPrice, MockCostPrice as CostPrice FROM DemoSandboxGoodsReceiptDetails WHERE OfflineReferenceId = ?",
+                [sr.OfflineReferenceId]
+              );
+              sDetails = dRows.map(d => ({
+                productName: d.ProductName,
+                barcode: "",
+                quantity: d.Quantity,
+                costPrice: d.MockCostPrice ?? d.CostPrice ?? 0,
+              }));
+            } catch { }
+
+            receiptResult.unshift({
+              key: `demo:${sr.OfflineReferenceId}`,
+              id: sr.OfflineReferenceId,
+              offlineId: sr.OfflineReferenceId,
+              totalAmount: sr.TotalAmount,
+              date: sr.CreatedAt,
+              creator: "Khách Trải Nghiệm",
+              supplier: sr.SupplierName || "Nhà cung cấp",
+              remarks: sr.Remarks || "Phiếu nhập thử nghiệm",
+              status: "Trải nghiệm",
+              isSynced: false,
+              details: sDetails
+            });
+          }
         }
 
         receiptResult.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -358,7 +434,7 @@ export default function InvoiceScreen() {
     try {
       const db = await getDBConnection();
       const sups = await db.getAllAsync<{ Id: number; Name: string }>(
-        "SELECT Id, Name FROM LocalSuppliers ORDER BY Name ASC"
+        "SELECT Id, Name FROM LocalSuppliers WHERE (IsDeleted = 0 OR IsDeleted IS NULL) AND (IsActive = 1 OR IsActive IS NULL) ORDER BY Name ASC"
       );
       const prods = await db.getAllAsync<{ Id: string; Name: string; Price: number; Barcode: string }>(
         "SELECT Id, Name, Price, Barcode FROM LocalProducts ORDER BY Name ASC"
@@ -550,6 +626,30 @@ export default function InvoiceScreen() {
     try {
       const sup = availableSuppliers.find(s => s.Id === selectedSupplierId);
       const total = validatedItems.reduce((sum, i) => sum + i.quantity * i.costPrice, 0);
+
+      if (isDemo) {
+        const demoRes = await useDemoSandboxStore.getState().createSandboxGoodsReceipt({
+          supplierId: selectedSupplierId!,
+          supplierName: sup?.Name || "Nhà cung cấp",
+          remarks: receiptRemarks.trim() || "Nhập hàng",
+          items: validatedItems.map(i => ({
+            productId: i.productId,
+            name: i.productName,
+            quantity: i.quantity,
+            mockCostPrice: i.costPrice,
+          })),
+        });
+        const demoRefId = demoRes.offlineReferenceId;
+        setIsCreateReceiptOpen(false);
+        useModalStore.getState().showModal({
+          title: "Thành công",
+          message: `Đã lập phiếu nhập kho thử nghiệm ${demoRefId} thành công.`,
+          type: "success"
+        });
+        await loadData();
+        return;
+      }
+
       const offlineRefId = typeof crypto !== 'undefined' && (crypto as any).randomUUID
         ? (crypto as any).randomUUID()
         : `GR_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -582,20 +682,21 @@ export default function InvoiceScreen() {
   const handlePrintOrder = async (order: MergedOrder) => {
     const items = (order.details && order.details.length > 0)
       ? order.details.map(d => ({
-          productName: d.productName,
-          barcode: d.barcode,
-          quantity: d.quantity,
-          unitPrice: d.unitPrice,
-          lineTotal: d.unitPrice * d.quantity
-        }))
+        productName: d.productName,
+        barcode: d.barcode,
+        quantity: d.quantity,
+        unitPrice: d.unitPrice,
+        lineTotal: d.unitPrice * d.quantity
+      }))
       : [{
-          productName: 'Đơn hàng POS',
-          quantity: 1,
-          unitPrice: order.totalAmount,
-          lineTotal: order.totalAmount
-        }];
+        productName: 'Đơn hàng POS',
+        quantity: 1,
+        unitPrice: order.totalAmount,
+        lineTotal: order.totalAmount
+      }];
 
     const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
+    const isOrderDemo = isDemo || order.offlineId?.startsWith('DEMO-');
 
     const html = generateSalesReceiptHtml({
       invoiceNumber: order.offlineId,
@@ -608,6 +709,7 @@ export default function InvoiceScreen() {
       discount: 0,
       totalAmount: order.totalAmount,
       paidAmount: order.totalAmount,
+      isDemo: isOrderDemo,
     }, { paperSize: '80mm' });
 
     try {
@@ -624,20 +726,21 @@ export default function InvoiceScreen() {
   const handlePrintReceipt = async (receipt: MergedReceipt) => {
     const items = (receipt.details && receipt.details.length > 0)
       ? receipt.details.map(d => ({
-          productName: d.productName,
-          barcode: d.barcode,
-          quantity: d.quantity,
-          costPrice: d.costPrice,
-          lineTotal: d.costPrice * d.quantity
-        }))
+        productName: d.productName,
+        barcode: d.barcode,
+        quantity: d.quantity,
+        costPrice: d.costPrice,
+        lineTotal: d.costPrice * d.quantity
+      }))
       : [{
-          productName: 'Mặt hàng nhập kho',
-          quantity: 1,
-          costPrice: receipt.totalAmount,
-          lineTotal: receipt.totalAmount
-        }];
+        productName: 'Mặt hàng nhập kho',
+        quantity: 1,
+        costPrice: receipt.totalAmount,
+        lineTotal: receipt.totalAmount
+      }];
 
     const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
+    const isReceiptDemo = isDemo || receipt.offlineId?.startsWith('DEMO-');
 
     const html = generateGoodsReceiptHtml({
       receiptNumber: receipt.offlineId,
@@ -649,6 +752,7 @@ export default function InvoiceScreen() {
       items,
       totalQuantity: totalQty,
       totalAmount: receipt.totalAmount,
+      isDemo: isReceiptDemo,
     }, { paperSize: '80mm' });
 
     try {
@@ -688,10 +792,12 @@ export default function InvoiceScreen() {
 
       <View className="flex-row justify-between items-center border-t-2 border-gray-100 pt-3 mt-1">
         <View className="flex-row items-center">
-          {item.isSynced ? (
-            <><Ionicons name="checkmark-circle" size={18} color="#16a34a" /><Text className="ml-1 text-green-600 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
+          {item.offlineId.startsWith('DEMO-') ? (
+            <><Ionicons name="sparkles" size={18} color="#b45309" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">TRẢI NGHIỆM (SANDBOX)</Text></>
+          ) : item.isSynced ? (
+            <><Ionicons name="checkmark-circle" size={18} color="#15803d" /><Text className="ml-1 text-green-700 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
           ) : (
-            <><Ionicons name="time" size={18} color="#ea580c" /><Text className="ml-1 text-orange-600 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
+            <><Ionicons name="time" size={18} color="#92400e" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
           )}
         </View>
         <View className="flex-row items-center">
@@ -711,7 +817,13 @@ export default function InvoiceScreen() {
     >
       <View className="flex-row justify-between items-center mb-3">
         <Text className="font-bold text-lg text-black uppercase tracking-wider">{item.offlineId}</Text>
-        <Text className="text-black font-black font-serif text-lg">{formatCurrency(item.totalAmount)}</Text>
+        <Text className="text-black font-black font-serif text-lg">
+          {item.offlineId.startsWith('DEMO-')
+            ? `${formatCurrency(item.totalAmount)} (Mô phỏng)`
+            : canViewCostPrice && item.totalAmount != null
+              ? formatCurrency(item.totalAmount)
+              : "Không có quyền xem"}
+        </Text>
       </View>
       <View className="flex-row items-center mb-2">
         <Ionicons name="time-outline" size={16} color="#000" style={{ width: 24 }} />
@@ -728,10 +840,12 @@ export default function InvoiceScreen() {
 
       <View className="flex-row justify-between items-center border-t-2 border-gray-100 pt-3 mt-1">
         <View className="flex-row items-center">
-          {item.isSynced ? (
-            <><Ionicons name="checkmark-circle" size={18} color="#16a34a" /><Text className="ml-1 text-green-600 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
+          {item.offlineId.startsWith('DEMO-') ? (
+            <><Ionicons name="sparkles" size={18} color="#b45309" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">TRẢI NGHIỆM (SANDBOX)</Text></>
+          ) : item.isSynced ? (
+            <><Ionicons name="checkmark-circle" size={18} color="#15803d" /><Text className="ml-1 text-green-700 font-bold text-xs uppercase">ĐÃ ĐỒNG BỘ</Text></>
           ) : (
-            <><Ionicons name="time" size={18} color="#ea580c" /><Text className="ml-1 text-orange-600 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
+            <><Ionicons name="time" size={18} color="#92400e" /><Text className="ml-1 text-amber-800 font-bold text-xs uppercase">CHƯA ĐỒNG BỘ</Text></>
           )}
         </View>
         <View className="flex-row items-center">
@@ -742,9 +856,10 @@ export default function InvoiceScreen() {
     </TouchableOpacity>
   );
 
-  const canViewSales = ["Cashier", "Manager", "Admin", "SystemAdmin"].includes(role);
-  const canViewImports = ["WarehouseStaff", "Manager", "Admin", "SystemAdmin"].includes(role);
+  const canViewSales = ["Cashier", "Manager", "Admin", "SystemAdmin", "DemoUser", "Demo"].includes(role);
+  const canViewImports = ["WarehouseStaff", "Manager", "Admin", "SystemAdmin", "DemoUser", "Demo"].includes(role);
   const canManageReceipts = ["WarehouseStaff", "Manager", "Admin", "SystemAdmin"].includes(role);
+  const canViewCostPrice = ["Admin", "Manager", "SystemAdmin"].includes(role);
   const showTabSwitcher = canViewSales && canViewImports;
 
   return (
@@ -785,19 +900,25 @@ export default function InvoiceScreen() {
           <View className="flex-row border-b-2 border-black mt-1">
             <TouchableOpacity
               testID="tab-sales"
+              accessibilityRole="tab"
+              accessibilityLabel="Phiếu bán"
+              accessibilityState={{ selected: activeTab === "sales" }}
               onPress={() => setActiveTab("sales")}
               className={`flex-1 items-center py-2.5 ${activeTab === "sales" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "sales" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "sales" ? "text-black" : "text-neutral-600"}`}>
                 Phiếu bán
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID="tab-imports"
+              accessibilityRole="tab"
+              accessibilityLabel="Phiếu nhập"
+              accessibilityState={{ selected: activeTab === "imports" }}
               onPress={() => setActiveTab("imports")}
               className={`flex-1 items-center py-2.5 ${activeTab === "imports" ? "border-b-4 border-black" : ""}`}
             >
-              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "imports" ? "text-black" : "text-gray-400"}`}>
+              <Text className={`font-black uppercase tracking-wider text-xs ${activeTab === "imports" ? "text-black" : "text-neutral-600"}`}>
                 Phiếu nhập
               </Text>
             </TouchableOpacity>
@@ -942,8 +1063,14 @@ export default function InvoiceScreen() {
                 <View className="flex-row bg-black p-2">
                   <Text className="flex-1 text-white text-[11px] font-bold uppercase">Mặt hàng</Text>
                   <Text className="w-12 text-center text-white text-[11px] font-bold uppercase">SL</Text>
-                  <Text className="w-20 text-right text-white text-[11px] font-bold uppercase">Giá nhập</Text>
-                  <Text className="w-24 text-right text-white text-[11px] font-bold uppercase">Thành tiền</Text>
+                  {(canViewCostPrice || selectedReceipt?.offlineId?.startsWith('DEMO-')) && (
+                    <>
+                      <Text className="w-20 text-right text-white text-[11px] font-bold uppercase">
+                        {selectedReceipt?.offlineId?.startsWith('DEMO-') ? "Giá mô phỏng" : "Giá nhập"}
+                      </Text>
+                      <Text className="w-24 text-right text-white text-[11px] font-bold uppercase">Thành tiền</Text>
+                    </>
+                  )}
                 </View>
                 {(selectedReceipt?.details && selectedReceipt.details.length > 0) ? (
                   selectedReceipt.details.map((item, idx) => (
@@ -953,20 +1080,32 @@ export default function InvoiceScreen() {
                         {item.barcode ? <Text className="text-[10px] text-gray-500 font-mono">{item.barcode}</Text> : null}
                       </View>
                       <Text className="w-12 text-center text-xs font-bold text-black">{item.quantity}</Text>
-                      <Text className="w-20 text-right text-xs font-bold text-black">{formatCurrency(item.costPrice)}</Text>
-                      <Text className="w-24 text-right text-xs font-bold text-black">{formatCurrency(item.costPrice * item.quantity)}</Text>
+                      {(canViewCostPrice || selectedReceipt?.offlineId?.startsWith('DEMO-')) && (
+                        <>
+                          <Text className="w-20 text-right text-xs font-bold text-black">{formatCurrency(item.costPrice)}</Text>
+                          <Text className="w-24 text-right text-xs font-bold text-black">{formatCurrency(item.costPrice * item.quantity)}</Text>
+                        </>
+                      )}
                     </View>
                   ))
                 ) : (
                   <View className="p-4 items-center">
-                    <Text className="text-xs text-gray-500 italic">Tổng tiền: {formatCurrency(selectedReceipt?.totalAmount || 0)}</Text>
+                    <Text className="text-xs text-gray-500 italic">
+                      {(canViewCostPrice || selectedReceipt?.offlineId?.startsWith('DEMO-')) && selectedReceipt?.totalAmount != null ? `Tổng tiền: ${formatCurrency(selectedReceipt.totalAmount)}` : "Danh sách mặt hàng trống"}
+                    </Text>
                   </View>
                 )}
               </View>
 
               <View className="flex-row justify-between items-center py-3 border-t-2 border-black">
                 <Text className="font-black text-sm uppercase">Tổng tiền:</Text>
-                <Text className="font-black font-serif text-xl text-black">{formatCurrency(selectedReceipt?.totalAmount || 0)}</Text>
+                <Text className="font-black font-serif text-xl text-black">
+                  {selectedReceipt?.offlineId?.startsWith('DEMO-')
+                    ? `${formatCurrency(selectedReceipt?.totalAmount || 0)} (Mô phỏng)`
+                    : canViewCostPrice && selectedReceipt?.totalAmount != null
+                      ? formatCurrency(selectedReceipt.totalAmount)
+                      : "Không có quyền xem"}
+                </Text>
               </View>
 
               <View className="flex-row gap-2 mt-4 pt-3 border-t-2 border-black">
@@ -976,14 +1115,16 @@ export default function InvoiceScreen() {
                 >
                   <Text className="text-xs font-bold text-gray-700 uppercase">Đóng</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  testID="btn-print-goods-receipt"
-                  onPress={() => handlePrintReceipt(selectedReceipt!)}
-                  className="flex-1 bg-black py-2.5 border-2 border-black items-center justify-center flex-row"
-                >
-                  <Ionicons name="print-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
-                  <Text className="text-xs font-black text-white uppercase">In phiếu nhập</Text>
-                </TouchableOpacity>
+                {(canViewCostPrice || isDemo || selectedReceipt?.offlineId?.startsWith('DEMO-')) && (
+                  <TouchableOpacity
+                    testID="btn-print-goods-receipt"
+                    onPress={() => handlePrintReceipt(selectedReceipt!)}
+                    className="flex-1 bg-black py-2.5 border-2 border-black items-center justify-center flex-row"
+                  >
+                    <Ionicons name="print-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
+                    <Text className="text-xs font-black text-white uppercase">In phiếu nhập</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </ScrollView>
           </View>

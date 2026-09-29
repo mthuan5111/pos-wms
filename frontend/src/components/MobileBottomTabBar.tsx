@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/store/authStore';
 import { useSafeLogout } from '@/hooks/useSafeLogout';
+import { getRoleDisplayName, isDemoRole } from '@/utils/roleUtils';
 
 const ROUTE_META: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   POS: { label: "Bán hàng", icon: "cart" },
@@ -43,7 +44,7 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
 
     if (activeRoute !== routeName && !event.defaultPrevented) {
       props.navigation.dispatch({
-        ...CommonActions.navigate({ name: routeName, merge: true }),
+        ...CommonActions.navigate(routeName, undefined, { merge: true }),
         target: props.state.key,
       });
     }
@@ -92,6 +93,8 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
             <TouchableOpacity
               key={route.key}
               testID={`bottom-tab-${route.name.toLowerCase()}`}
+              accessibilityRole="button"
+              accessibilityLabel={meta.label}
               onPress={() => navigateTo(route.name, route.key)}
               activeOpacity={0.7}
               style={{
@@ -139,6 +142,8 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
         {useCompactMenu && (
           <TouchableOpacity
             testID="bottom-tab-more"
+            accessibilityRole="button"
+            accessibilityLabel="Thêm menu"
             onPress={() => setIsMoreMenuVisible(true)}
             activeOpacity={0.7}
             style={{
@@ -217,7 +222,7 @@ export default function MobileBottomTabBar(props: BottomTabBarProps) {
                   Chức năng mở rộng
                 </Text>
                 <Text style={{ fontSize: 11, color: '#525252' }}>
-                  {user?.name || user?.username} ({user?.role})
+                  {isDemoRole(user?.role) ? (user?.name?.replace(/\s*\(Demo\)/i, '') || 'Khách Trải Nghiệm') : (user?.name || user?.username)} ({getRoleDisplayName(user?.role)})
                 </Text>
               </View>
               <TouchableOpacity

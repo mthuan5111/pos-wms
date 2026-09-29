@@ -92,61 +92,109 @@ namespace POS_WMS.Infrastructure.Services
                 throw new ArgumentException("OfflineReferenceId không được để trống.");
             }
 
-            // Check if this adjustment was already applied (idempotent deduplication)
+            // Layer 1: Pre-check if this adjustment was already applied (idempotent deduplication)
             var alreadyProcessed = await _context.StockMovements
-                .AnyAsync(sm => sm.ReferenceType == "ADJUSTMENT" && sm.CreatedBy.Contains(request.OfflineReferenceId));
+                .AnyAsync(sm => sm.ReferenceType == "ADJUSTMENT" &&
+                    (sm.OfflineReferenceId == request.OfflineReferenceId || sm.CreatedBy.Contains(request.OfflineReferenceId)));
             if (alreadyProcessed)
             {
                 return true;
             }
 
-            var inventory = await _context.Inventories.FirstOrDefaultAsync(i => i.ProductId == request.ProductId);
-            if (inventory == null)
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
-                var product = await _context.Products.FindAsync(request.ProductId);
-                if (product == null)
+                var inventory = await _context.Inventories.FirstOrDefaultAsync(i => i.ProductId == request.ProductId);
+                if (inventory == null)
                 {
-                    throw new KeyNotFoundException($"Không tìm thấy thông tin sản phẩm ID {request.ProductId}");
-                }
-                inventory = new Inventory
-                {
-                    ProductId = request.ProductId,
-                    StockQuantity = 0
-                };
-                await _context.Inventories.AddAsync(inventory);
-            }
-
-            int targetStock = inventory.StockQuantity + request.Delta;
-            if (targetStock < 0)
-            {
-                throw new InvalidOperationException($"Số lượng tồn kho sau điều chỉnh không thể âm (Hiện tại: {inventory.StockQuantity}, Delta: {request.Delta})");
-            }
-
-            inventory.StockQuantity = targetStock;
-            await _context.SaveChangesAsync();
-
-            if (_stockMovementService != null)
-            {
-                var actorName = "Admin";
-                if (request.UserId.HasValue && request.UserId > 0)
-                {
-                    var u = await _context.Users.FindAsync(request.UserId.Value);
-                    actorName = u?.Username ?? $"User#{request.UserId.Value}";
+                    var product = await _context.Products.FindAsync(request.ProductId);
+                    if (product == null)
+                    {
+                        throw new KeyNotFoundException($"Không tìm thấy thông tin sản phẩm ID {request.ProductId}");
+                    }
+                    inventory = new Inventory
+                    {
+                        ProductId = request.ProductId,
+                        StockQuantity = 0
+                    };
+                    await _context.Inventories.AddAsync(inventory);
                 }
 
-                await _stockMovementService.RecordMovementAsync(
-                    inventory.ProductId,
-                    Domain.Enums.StockMovementType.Adjustment,
-                    Math.Abs(request.Delta),
-                    "ADJUSTMENT",
-                    inventory.Id,
-                    inventory.StockQuantity,
-                    $"{actorName}:{request.OfflineReferenceId}",
-                    request.ShiftId
-                );
-            }
+                int targetStock = inventory.StockQuantity + request.Delta;
+                if (targetStock < 0)
+                {
+                    throw new InvalidOperationException($"Số lượng tồn kho sau điều chỉnh không thể âm (Hiện tại: {inventory.StockQuantity}, Delta: {request.Delta})");
+                }
 
-            return true;
+                inventory.StockQuantity = targetStock;
+                await _context.SaveChangesAsync();
+
+                if (_stockMovementService != null)
+                {
+                    var actorName = "Admin";
+                    if (request.UserId.HasValue && request.UserId > 0)
+                    {
+                        var u = await _context.Users.FindAsync(request.UserId.Value);
+                        actorName = u?.Username ?? $"User#{request.UserId.Value}";
+                    }
+
+                    await _stockMovementService.RecordMovementAsync(
+                        inventory.ProductId,
+                        Domain.Enums.StockMovementType.Adjustment,
+                        Math.Abs(request.Delta),
+                        "ADJUSTMENT",
+                        inventory.Id,
+                        inventory.StockQuantity,
+                        $"{actorName}:{request.OfflineReferenceId}",
+                        request.ShiftId,
+                        request.OfflineReferenceId
+                    );
+                }
+
+                await transaction.CommitAsync();
+                return true;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                await transaction.RollbackAsync();
+
+                // Check if another concurrent thread with the SAME OfflineReferenceId already committed
+                var processed = await _context.StockMovements
+                    .AnyAsync(sm => sm.ReferenceType == "ADJUSTMENT" &&
+                        (sm.OfflineReferenceId == request.OfflineReferenceId || sm.CreatedBy.Contains(request.OfflineReferenceId)));
+                if (processed)
+                {
+                    return true;
+                }
+                throw;
+            }
+            catch (DbUpdateException ex)
+            {
+                await transaction.RollbackAsync();
+
+                if (ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx &&
+                    (sqlEx.Number == 2601 || sqlEx.Number == 2627) &&
+                    sqlEx.Message.Contains("IX_StockMovements_OfflineReferenceId"))
+                {
+                    // Concurrent race condition safely prevented by database unique constraint
+                    return true;
+                }
+
+                var processed = await _context.StockMovements
+                    .AnyAsync(sm => sm.ReferenceType == "ADJUSTMENT" &&
+                        (sm.OfflineReferenceId == request.OfflineReferenceId || sm.CreatedBy.Contains(request.OfflineReferenceId)));
+                if (processed)
+                {
+                    return true;
+                }
+
+                throw;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
         }
     }
 }

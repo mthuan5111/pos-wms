@@ -17,8 +17,10 @@ import { useCacheInvalidationStore } from "@/store/useCacheInvalidationStore";
 import { useAuthStore } from "@/store/authStore";
 import { useModalStore } from "@/store/useModalStore";
 import { useGlobalSyncStore } from "@/store/useGlobalSyncStore";
+import { useDemoSandboxStore } from "@/store/useDemoSandboxStore";
 import { generateGoodsReceiptHtml } from "@/utils/printTemplates";
 import { printDocument } from "@/utils/printService";
+import { isDemoRole } from "@/utils/roleUtils";
 
 export interface LocalGoodsReceiptRow {
   OfflineReferenceId: string;
@@ -45,6 +47,10 @@ export default function ReceiptsTab() {
   const [isLoading, setIsLoading] = useState(false);
   const navigation = useNavigation<any>();
   const user = useAuthStore((state) => state.user);
+  const role = user?.role || "";
+  const isDemo = isDemoRole(role);
+  const canManageReceipts = ["Admin", "Manager", "WarehouseStaff", "DemoUser", "Demo"].includes(role);
+  const canViewCostPrice = ["Admin", "Manager"].includes(role);
 
   // Modal create state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -66,6 +72,39 @@ export default function ReceiptsTab() {
     setIsLoading(true);
     try {
       const db = await getDBConnection();
+
+      let sandboxRows: LocalGoodsReceiptRow[] = [];
+      if (isDemo) {
+        const sessionId = await useDemoSandboxStore.getState().initSession();
+        const sRows = await db.getAllAsync<any>(
+          "SELECT * FROM DemoSandboxGoodsReceipts WHERE SessionId = ? ORDER BY CreatedAt DESC",
+          [sessionId]
+        );
+        for (const sr of sRows) {
+          const sDetails = await db.getAllAsync<any>(
+            "SELECT * FROM DemoSandboxGoodsReceiptDetails WHERE OfflineReferenceId = ?",
+            [sr.OfflineReferenceId]
+          );
+          sandboxRows.push({
+            OfflineReferenceId: sr.OfflineReferenceId,
+            TotalAmount: sr.TotalAmount,
+            CreatedAt: sr.CreatedAt,
+            IsSynced: sr.IsSynced,
+            UserId: user?.id || 1,
+            SupplierId: sr.SupplierId,
+            SupplierName: sr.SupplierName,
+            Remarks: sr.Remarks,
+            ServerId: null,
+            details: sDetails.map(d => ({
+              ProductId: d.ProductId,
+              Quantity: d.Quantity,
+              CostPrice: d.CostPrice,
+              ProductName: d.ProductName,
+            })),
+          });
+        }
+      }
+
       const rows = await db.getAllAsync<LocalGoodsReceiptRow>(
         "SELECT * FROM LocalGoodsReceipts ORDER BY CreatedAt DESC"
       );
@@ -83,7 +122,7 @@ export default function ReceiptsTab() {
           ProductName: productMap.get(String(d.ProductId)) || `SP #${d.ProductId}`,
         }));
       }
-      setReceipts([...rows]);
+      setReceipts([...sandboxRows, ...rows]);
     } catch (error) {
       console.error("[ReceiptsTab] Lỗi lấy danh sách phiếu nhập:", error);
     } finally {
@@ -115,7 +154,7 @@ export default function ReceiptsTab() {
     try {
       const db = await getDBConnection();
       const supRows = await db.getAllAsync<{ Id: number; Name: string }>(
-        "SELECT Id, Name FROM LocalSuppliers ORDER BY Name ASC"
+        "SELECT Id, Name FROM LocalSuppliers WHERE (IsDeleted = 0 OR IsDeleted IS NULL) AND (IsActive = 1 OR IsActive IS NULL) ORDER BY Name ASC"
       );
       const prodRows = await db.getAllAsync<{ Id: string; Name: string; Price: number; StockQuantity: number }>(
         "SELECT Id, Name, Price, StockQuantity FROM LocalProducts ORDER BY Name ASC"
@@ -241,17 +280,42 @@ export default function ReceiptsTab() {
           : `GR_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
       const currentUserId = user?.id || 1;
-      const consolidatedMap = new Map<string, { productId: string; quantity: number; costPrice: number }>();
+      const consolidatedMap = new Map<string, { productId: string; productName: string; quantity: number; costPrice: number }>();
       for (const item of receiptItems) {
         const pid = String(item.productId);
         if (consolidatedMap.has(pid)) {
           const existing = consolidatedMap.get(pid)!;
           existing.quantity += item.quantity;
         } else {
-          consolidatedMap.set(pid, { productId: pid, quantity: item.quantity, costPrice: item.costPrice });
+          consolidatedMap.set(pid, { productId: pid, productName: item.productName, quantity: item.quantity, costPrice: item.costPrice });
         }
       }
       const finalItems = Array.from(consolidatedMap.values());
+
+      if (isDemo) {
+        const demoRes = await useDemoSandboxStore.getState().createSandboxGoodsReceipt({
+          supplierId: selectedSupplierId!,
+          supplierName: selectedSupplierName || `NCC #${selectedSupplierId}`,
+          remarks,
+          items: finalItems.map(i => ({
+            productId: i.productId,
+            name: i.productName,
+            quantity: i.quantity,
+            mockCostPrice: i.costPrice,
+          })),
+        });
+        const demoRefId = demoRes.offlineReferenceId;
+
+        setIsCreateModalOpen(false);
+        await loadReceipts();
+
+        useModalStore.getState().showModal({
+          title: "Thành công",
+          message: `Đã tạo phiếu nhập kho thử nghiệm ${demoRefId} thành công.`,
+          type: "success",
+        });
+        return;
+      }
 
       await insertLocalGoodsReceipt(
         offlineRefId,
@@ -295,29 +359,32 @@ export default function ReceiptsTab() {
     if (!selectedReceipt) return;
     const items = (selectedReceipt.details && selectedReceipt.details.length > 0)
       ? selectedReceipt.details.map(d => ({
-          productName: d.ProductName,
-          quantity: d.Quantity,
-          costPrice: d.CostPrice,
-          lineTotal: d.Quantity * d.CostPrice
-        }))
+        productName: d.ProductName,
+        quantity: d.Quantity,
+        costPrice: d.CostPrice,
+        lineTotal: d.Quantity * d.CostPrice
+      }))
       : [{
-          productName: 'Hàng hóa nhập kho',
-          quantity: 1,
-          costPrice: selectedReceipt.TotalAmount,
-          lineTotal: selectedReceipt.TotalAmount
-        }];
+        productName: 'Hàng hóa nhập kho',
+        quantity: 1,
+        costPrice: selectedReceipt.TotalAmount,
+        lineTotal: selectedReceipt.TotalAmount
+      }];
 
     const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
+    const isReceiptDemo = isDemo || selectedReceipt.OfflineReferenceId?.startsWith('DEMO-');
 
     const html = generateGoodsReceiptHtml({
       receiptNumber: selectedReceipt.OfflineReferenceId,
       receiptDate: selectedReceipt.CreatedAt,
       supplierName: selectedReceipt.SupplierName || `NCC #${selectedReceipt.SupplierId}`,
-      creatorName: user?.name || user?.username || 'Thủ kho',
+      creatorName: isReceiptDemo ? 'Khách Trải Nghiệm' : (user?.name || user?.username || 'Thủ kho'),
       remarks: selectedReceipt.Remarks || undefined,
+      hideCostPrice: !canViewCostPrice && !isReceiptDemo,
       items,
       totalQuantity: totalQty,
-      totalAmount: selectedReceipt.TotalAmount
+      totalAmount: (canViewCostPrice || isReceiptDemo) ? selectedReceipt.TotalAmount : null,
+      isDemo: isReceiptDemo,
     }, { paperSize: '80mm' });
 
     try {
@@ -350,15 +417,17 @@ export default function ReceiptsTab() {
           </Text>
         </View>
         <View className="flex-row gap-2">
-          <TouchableOpacity
-            testID="create-receipt-btn"
-            accessibilityLabel="Tạo phiếu nhập"
-            onPress={handleOpenCreateModal}
-            className="bg-black px-4 py-2 flex-row items-center flex-1 sm:flex-initial justify-center"
-          >
-            <Ionicons name="add" size={16} color="#fff" style={{ marginRight: 4 }} />
-            <Text className="text-white font-bold uppercase text-xs">Tạo phiếu nhập</Text>
-          </TouchableOpacity>
+          {canManageReceipts && (
+            <TouchableOpacity
+              testID="create-receipt-btn"
+              accessibilityLabel="Tạo phiếu nhập"
+              onPress={handleOpenCreateModal}
+              className="bg-black px-4 py-2 flex-row items-center flex-1 sm:flex-initial justify-center"
+            >
+              <Ionicons name="add" size={16} color="#fff" style={{ marginRight: 4 }} />
+              <Text className="text-white font-bold uppercase text-xs">Tạo phiếu nhập</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             onPress={() => navigation.navigate("Settings")}
             className="border-2 border-black px-3 py-2 justify-center items-center"
@@ -397,7 +466,11 @@ export default function ReceiptsTab() {
                 ) : null}
               </View>
               <Text className="text-black font-black font-serif text-lg">
-                {formatCurrency(item.TotalAmount)}
+                {item.OfflineReferenceId.startsWith("DEMO-")
+                  ? `${formatCurrency(item.TotalAmount)} (Mô phỏng)`
+                  : canViewCostPrice && item.TotalAmount != null
+                    ? formatCurrency(item.TotalAmount)
+                    : "Không có quyền xem"}
               </Text>
             </View>
 
@@ -433,7 +506,11 @@ export default function ReceiptsTab() {
                       SL: {d.Quantity}
                     </Text>
                     <Text className="text-gray-600 text-xs w-24 text-right">
-                      {formatCurrency(d.CostPrice || 0)}
+                      {item.OfflineReferenceId.startsWith("DEMO-")
+                        ? formatCurrency(d.CostPrice || 0)
+                        : canViewCostPrice
+                          ? formatCurrency(d.CostPrice || 0)
+                          : "---"}
                     </Text>
                   </View>
                 ))}
@@ -442,7 +519,11 @@ export default function ReceiptsTab() {
 
             <View className="mt-3 flex-row justify-between items-center border-t border-gray-100 pt-2">
               <Text className="text-xs text-gray-500 italic">Nhấn để xem chi tiết</Text>
-              {item.IsSynced === 1 ? (
+              {item.OfflineReferenceId.startsWith("DEMO-") ? (
+                <Text className="text-amber-800 font-bold text-xs uppercase">
+                  <Ionicons name="sparkles" /> Sandbox (Trải nghiệm)
+                </Text>
+              ) : item.IsSynced === 1 ? (
                 <Text className="text-green-700 font-bold text-xs uppercase">
                   <Ionicons name="checkmark-circle" /> Đã đồng bộ
                 </Text>
@@ -521,14 +602,12 @@ export default function ReceiptsTab() {
                             setSelectedSupplierId(s.Id);
                             setSelectedSupplierName(s.Name);
                           }}
-                          className={`px-3 py-2 border-2 ${
-                            isSelected ? "border-black bg-black" : "border-gray-300 bg-white"
-                          }`}
+                          className={`px-3 py-2 border-2 ${isSelected ? "border-black bg-black" : "border-gray-300 bg-white"
+                            }`}
                         >
                           <Text
-                            className={`font-bold text-xs ${
-                              isSelected ? "text-white" : "text-black"
-                            }`}
+                            className={`font-bold text-xs ${isSelected ? "text-white" : "text-black"
+                              }`}
                           >
                             {s.Name}
                           </Text>
@@ -569,9 +648,8 @@ export default function ReceiptsTab() {
                         key={p.Id}
                         testID={`receipt-prod-option-${p.Id}`}
                         onPress={() => handleAddProductToReceipt(p)}
-                        className={`flex-row justify-between items-center p-2 border-b border-gray-100 ${
-                          isAdded ? "bg-gray-50" : "bg-white"
-                        }`}
+                        className={`flex-row justify-between items-center p-2 border-b border-gray-100 ${isAdded ? "bg-gray-50" : "bg-white"
+                          }`}
                       >
                         <View className="flex-1 mr-2">
                           <Text className="font-bold text-xs text-black" numberOfLines={1}>
@@ -711,9 +789,8 @@ export default function ReceiptsTab() {
                 accessibilityLabel="submit-receipt-btn"
                 disabled={isSubmitting}
                 onPress={handleSaveReceipt}
-                className={`px-6 py-2 bg-black flex-row items-center ${
-                  isSubmitting ? "opacity-60" : ""
-                }`}
+                className={`px-6 py-2 bg-black flex-row items-center ${isSubmitting ? "opacity-60" : ""
+                  }`}
               >
                 {isSubmitting ? (
                   <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
@@ -774,9 +851,8 @@ export default function ReceiptsTab() {
                 <View className="flex-row justify-between mb-1">
                   <Text className="text-gray-500 text-xs font-bold">Trạng thái đồng bộ:</Text>
                   <Text
-                    className={`text-xs font-black uppercase ${
-                      selectedReceipt?.IsSynced === 1 ? "text-green-700" : "text-red-700"
-                    }`}
+                    className={`text-xs font-black uppercase ${selectedReceipt?.IsSynced === 1 ? "text-green-700" : "text-red-700"
+                      }`}
                   >
                     {selectedReceipt?.IsSynced === 1 ? "Đã đồng bộ lên máy chủ" : "Chưa đồng bộ (Local)"}
                   </Text>
@@ -801,12 +877,16 @@ export default function ReceiptsTab() {
                   <Text className="font-bold text-[10px] uppercase text-black w-14 text-right">
                     Số lượng
                   </Text>
-                  <Text className="font-bold text-[10px] uppercase text-black w-24 text-right">
-                    Giá nhập
-                  </Text>
-                  <Text className="font-bold text-[10px] uppercase text-black w-24 text-right">
-                    Thành tiền
-                  </Text>
+                  {(canViewCostPrice || selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')) && (
+                    <>
+                      <Text className="font-bold text-[10px] uppercase text-black w-24 text-right">
+                        {selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-') ? "Giá mô phỏng" : "Giá nhập"}
+                      </Text>
+                      <Text className="font-bold text-[10px] uppercase text-black w-24 text-right">
+                        Thành tiền
+                      </Text>
+                    </>
+                  )}
                 </View>
                 {selectedReceipt?.details?.map((d, i) => (
                   <View
@@ -819,12 +899,16 @@ export default function ReceiptsTab() {
                     <Text className="text-xs font-bold text-black w-14 text-right">
                       {d.Quantity}
                     </Text>
-                    <Text className="text-xs text-gray-600 w-24 text-right">
-                      {formatCurrency(d.CostPrice)}
-                    </Text>
-                    <Text className="text-xs font-black text-black w-24 text-right">
-                      {formatCurrency(d.Quantity * d.CostPrice)}
-                    </Text>
+                    {(canViewCostPrice || selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')) && (
+                      <>
+                        <Text className="text-xs text-gray-600 w-24 text-right">
+                          {formatCurrency(d.CostPrice)}
+                        </Text>
+                        <Text className="text-xs font-black text-black w-24 text-right">
+                          {formatCurrency(d.Quantity * d.CostPrice)}
+                        </Text>
+                      </>
+                    )}
                   </View>
                 ))}
               </View>
@@ -832,7 +916,11 @@ export default function ReceiptsTab() {
               <View className="flex-row justify-between items-center p-3 bg-gray-50 border border-black">
                 <Text className="font-bold uppercase text-xs text-black">TỔNG CỘNG:</Text>
                 <Text className="font-black font-serif text-lg text-black">
-                  {selectedReceipt ? formatCurrency(selectedReceipt.TotalAmount) : "0 đ"}
+                  {selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')
+                    ? `${formatCurrency(selectedReceipt.TotalAmount)} (Mô phỏng)`
+                    : canViewCostPrice && selectedReceipt?.TotalAmount != null
+                      ? formatCurrency(selectedReceipt.TotalAmount)
+                      : "Không có quyền xem"}
                 </Text>
               </View>
             </ScrollView>
@@ -844,14 +932,16 @@ export default function ReceiptsTab() {
               >
                 <Text className="text-black font-bold text-xs uppercase">Đóng</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                testID="btn-print-receipt-tab"
-                onPress={handlePrintSelectedReceipt}
-                className="bg-black px-4 py-2 flex-row items-center"
-              >
-                <Ionicons name="print-outline" size={16} color="#fff" style={{ marginRight: 4 }} />
-                <Text className="text-white font-bold text-xs uppercase">In phiếu nhập</Text>
-              </TouchableOpacity>
+              {(canViewCostPrice || isDemo || selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')) && (
+                <TouchableOpacity
+                  testID="btn-print-receipt-tab"
+                  onPress={handlePrintSelectedReceipt}
+                  className="bg-black px-4 py-2 flex-row items-center"
+                >
+                  <Ionicons name="print-outline" size={16} color="#fff" style={{ marginRight: 4 }} />
+                  <Text className="text-white font-bold text-xs uppercase">In phiếu nhập</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </View>

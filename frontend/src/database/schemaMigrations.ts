@@ -3,9 +3,11 @@ export interface SQLiteDatabaseAdapter {
   runAsync(sql: string, ...params: any[]): Promise<any>;
   getAllAsync<T = any>(sql: string, ...params: any[]): Promise<T[]>;
   getFirstAsync<T = any>(sql: string, ...params: any[]): Promise<T | null>;
+  withTransactionAsync?(task: () => Promise<void>): Promise<void>;
 }
 
-export const TARGET_SCHEMA_VERSION = 6;
+export const TARGET_SCHEMA_VERSION = 9;
+export const TARGET_DATA_GENERATION = "20260922_GEN2";
 
 export async function safeAddColumn(
   db: SQLiteDatabaseAdapter,
@@ -28,6 +30,16 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
   try {
     await db.execAsync("PRAGMA journal_mode = WAL;");
     await db.execAsync("PRAGMA foreign_keys = ON;");
+
+    // Data generation record (purely non-destructive metadata tracking to prevent accidental data purge)
+    await db.execAsync("CREATE TABLE IF NOT EXISTS _data_generation (generation TEXT);");
+    const genRow = await db.getFirstAsync<{ generation: string }>("SELECT generation FROM _data_generation LIMIT 1");
+    if (!genRow) {
+      await db.runAsync("INSERT INTO _data_generation (generation) VALUES (?)", TARGET_DATA_GENERATION);
+    } else if (genRow.generation !== TARGET_DATA_GENERATION) {
+      console.log(`[DB] Cập nhật data generation (${genRow.generation} -> ${TARGET_DATA_GENERATION}) an toàn, giữ nguyên toàn bộ outbox local.`);
+      await db.runAsync("UPDATE _data_generation SET generation = ?", TARGET_DATA_GENERATION);
+    }
 
     // Version management
     await db.execAsync("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER);");
@@ -52,6 +64,7 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
         Barcode TEXT,
         StockQuantity INTEGER NOT NULL,
         ImageUrl TEXT,
+        ImagePublicId TEXT,
         LowStockThreshold INTEGER DEFAULT 10,
         IsSalePriceConfigured INTEGER DEFAULT 1,
         FOREIGN KEY (CategoryId) REFERENCES LocalCategories(Id)
@@ -142,15 +155,128 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
         FinalReportSnapshot TEXT,
         ClosingRemarks TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxSessions (
+        SessionId TEXT PRIMARY KEY,
+        CreatedAt TEXT NOT NULL,
+        LastActivityAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxOrders (
+        OfflineReferenceId TEXT PRIMARY KEY,
+        SessionId TEXT NOT NULL,
+        CustomerName TEXT,
+        TotalAmount REAL NOT NULL,
+        PaymentMethod TEXT DEFAULT 'CASH',
+        CreatedAt TEXT NOT NULL,
+        IsSynced INTEGER DEFAULT 0,
+        SyncStatus TEXT DEFAULT 'Pending',
+        ShiftCode TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxOrderDetails (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        OfflineReferenceId TEXT NOT NULL,
+        SessionId TEXT NOT NULL,
+        ProductId TEXT NOT NULL,
+        ProductName TEXT NOT NULL,
+        Quantity INTEGER NOT NULL,
+        Price REAL NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxShifts (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        SessionId TEXT NOT NULL,
+        ShiftCode TEXT NOT NULL,
+        UserId INTEGER,
+        StartedAt TEXT NOT NULL,
+        EndedAt TEXT,
+        Status TEXT DEFAULT 'Open',
+        StartingCash REAL NOT NULL,
+        EndingCash REAL,
+        ExpectedCash REAL,
+        Difference REAL,
+        SummarySnapshot TEXT,
+        Remarks TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxGoodsReceipts (
+        OfflineReferenceId TEXT PRIMARY KEY,
+        SessionId TEXT NOT NULL,
+        SupplierId INTEGER NOT NULL,
+        SupplierName TEXT,
+        TotalAmount REAL NOT NULL,
+        Remarks TEXT,
+        CreatedAt TEXT NOT NULL,
+        Status TEXT DEFAULT 'Completed',
+        IsSynced INTEGER DEFAULT 0,
+        ShiftCode TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxGoodsReceiptDetails (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        OfflineReferenceId TEXT NOT NULL,
+        SessionId TEXT NOT NULL,
+        ProductId TEXT NOT NULL,
+        ProductName TEXT NOT NULL,
+        Quantity INTEGER NOT NULL,
+        MockCostPrice REAL NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS DemoSandboxStockAdjustments (
+        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+        OfflineReferenceId TEXT NOT NULL,
+        SessionId TEXT NOT NULL,
+        ProductId TEXT NOT NULL,
+        Delta INTEGER NOT NULL,
+        Reason TEXT,
+        CreatedAt TEXT NOT NULL,
+        BeforeQty INTEGER NOT NULL,
+        AfterQty INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS SyncCheckpoints (
+        ScopeKey TEXT PRIMARY KEY,
+        LastCursor INTEGER DEFAULT 0,
+        LastPulledAt TEXT,
+        IsBootstrapped INTEGER DEFAULT 0
+      );
     `);
+
+    // Ensure default checkpoint exists if table is empty (un-bootstrapped state: IsBootstrapped = 0)
+    const cpRow = await db.getFirstAsync<{ ScopeKey: string }>("SELECT ScopeKey FROM SyncCheckpoints WHERE ScopeKey = 'global'");
+    if (!cpRow) {
+      await db.runAsync(
+        "INSERT INTO SyncCheckpoints (ScopeKey, LastCursor, LastPulledAt, IsBootstrapped) VALUES ('global', 0, NULL, 0)"
+      );
+    }
 
     // Ensure all schema columns exist across older installs (idempotent safeAddColumn)
     await safeAddColumn(db, "LocalCategories", "Description", "TEXT");
     await safeAddColumn(db, "LocalCategories", "Code", "TEXT");
     await safeAddColumn(db, "LocalCategories", "IsSystem", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalCategories", "IsActive", "INTEGER DEFAULT 1");
+    await safeAddColumn(db, "LocalCategories", "UpdatedAt", "TEXT");
+    await safeAddColumn(db, "LocalCategories", "IsDeleted", "INTEGER DEFAULT 0");
+
+    await safeAddColumn(db, "LocalSuppliers", "IsActive", "INTEGER DEFAULT 1");
+    await safeAddColumn(db, "LocalSuppliers", "UpdatedAt", "TEXT");
+    await safeAddColumn(db, "LocalSuppliers", "IsDeleted", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalSuppliers", "SyncStatus", "TEXT DEFAULT 'Synced'");
+    await safeAddColumn(db, "LocalSuppliers", "SyncAction", "TEXT");
+    await safeAddColumn(db, "LocalSuppliers", "SyncError", "TEXT");
+    await safeAddColumn(db, "LocalSuppliers", "RetryCount", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalSuppliers", "NextRetryAt", "TEXT");
+
     await safeAddColumn(db, "LocalProducts", "SupplierId", "INTEGER");
     await safeAddColumn(db, "LocalProducts", "LowStockThreshold", "INTEGER DEFAULT 10");
     await safeAddColumn(db, "LocalProducts", "IsSalePriceConfigured", "INTEGER DEFAULT 1");
+    await safeAddColumn(db, "LocalProducts", "ImagePublicId", "TEXT");
+    await safeAddColumn(db, "LocalProducts", "ServerVersion", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalProducts", "UpdatedAt", "TEXT");
+    await safeAddColumn(db, "LocalProducts", "IsDeleted", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalProducts", "LastSyncedAt", "TEXT");
+    await safeAddColumn(db, "LocalProducts", "IsActive", "INTEGER DEFAULT 1");
 
     await safeAddColumn(db, "LocalOrders", "CustomerId", "INTEGER");
     await safeAddColumn(db, "LocalOrders", "OwnerUserId", "INTEGER");
@@ -160,17 +286,28 @@ export async function executeDatabaseMigrations(db: SQLiteDatabaseAdapter): Prom
     await safeAddColumn(db, "LocalOrders", "SyncRetryCount", "INTEGER DEFAULT 0");
     await safeAddColumn(db, "LocalOrders", "SyncStatus", "TEXT DEFAULT 'Pending'");
     await safeAddColumn(db, "LocalOrders", "ShiftId", "INTEGER");
+    await safeAddColumn(db, "LocalOrders", "ServerVersion", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalOrders", "LastSyncedAt", "TEXT");
+    await safeAddColumn(db, "LocalOrders", "NextRetryAt", "TEXT");
+    await safeAddColumn(db, "LocalOrders", "LastSafeErrorCode", "TEXT");
 
     await safeAddColumn(db, "LocalGoodsReceipts", "ServerId", "INTEGER");
     await safeAddColumn(db, "LocalGoodsReceipts", "SyncError", "TEXT");
     await safeAddColumn(db, "LocalGoodsReceipts", "SyncRetryCount", "INTEGER DEFAULT 0");
     await safeAddColumn(db, "LocalGoodsReceipts", "SyncStatus", "TEXT DEFAULT 'Pending'");
     await safeAddColumn(db, "LocalGoodsReceipts", "ShiftId", "INTEGER");
+    await safeAddColumn(db, "LocalGoodsReceipts", "ServerVersion", "INTEGER DEFAULT 0");
+    await safeAddColumn(db, "LocalGoodsReceipts", "LastSyncedAt", "TEXT");
+    await safeAddColumn(db, "LocalGoodsReceipts", "NextRetryAt", "TEXT");
+    await safeAddColumn(db, "LocalGoodsReceipts", "LastSafeErrorCode", "TEXT");
 
     await safeAddColumn(db, "LocalStockAdjustments", "SyncStatus", "TEXT DEFAULT 'Pending'");
     await safeAddColumn(db, "LocalStockAdjustments", "SyncError", "TEXT");
     await safeAddColumn(db, "LocalStockAdjustments", "RetryCount", "INTEGER DEFAULT 0");
     await safeAddColumn(db, "LocalStockAdjustments", "ShiftId", "INTEGER");
+    await safeAddColumn(db, "LocalStockAdjustments", "NextRetryAt", "TEXT");
+    await safeAddColumn(db, "LocalStockAdjustments", "LastSafeErrorCode", "TEXT");
+    await safeAddColumn(db, "LocalStockAdjustments", "LastSyncedAt", "TEXT");
 
     await db.runAsync("DELETE FROM _schema_version");
     await db.runAsync("INSERT INTO _schema_version (version) VALUES (?)", TARGET_SCHEMA_VERSION);

@@ -6,7 +6,6 @@
 # Ignore sensitive configuration files
 POS_WMS.WebApi/appsettings.json
 POS_WMS.WebApi/appsettings.Development.json
-POS_WMS.WebApi/appsettings.Production.json
 .expo/
 
 # User-specific files

@@ -6,6 +6,7 @@ namespace POS_WMS.Application.Interfaces
     public interface IAuthService
     {
         Task<AuthResponseDTO?> LoginAsync(LoginRequestDTO request);
+        Task<AuthResponseDTO?> DemoLoginAsync();
         Task<AuthResponseDTO?> RefreshTokenAsync(TokenRequestDTO request);
         Task LogoutAsync(int userId, string username);
     }

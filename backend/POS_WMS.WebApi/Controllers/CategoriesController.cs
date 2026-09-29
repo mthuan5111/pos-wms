@@ -151,13 +151,13 @@ namespace POS_WMS.WebApi.Controllers
 
                 return Ok(ApiResponse<int>.Success(category.Id, "Thêm danh mục thành công"));
             }
-            catch (DbUpdateException dbEx)
+            catch (DbUpdateException)
             {
-                return Conflict(ApiResponse<int>.Failure($"Xung đột dữ liệu danh mục: {dbEx.InnerException?.Message ?? dbEx.Message}", "CATEGORY_CONFLICT"));
+                return Conflict(ApiResponse<int>.Failure("Không thể lưu danh mục do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "CATEGORY_CONFLICT"));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, ApiResponse<int>.Failure($"Lỗi: {ex.Message}", "ERR_CREATE_CATEGORY"));
+                return StatusCode(500, ApiResponse<int>.Failure("Hệ thống gặp sự cố khi tạo danh mục. Vui lòng thử lại sau.", "ERR_CREATE_CATEGORY"));
             }
         }
 
@@ -203,13 +203,13 @@ namespace POS_WMS.WebApi.Controllers
 
                 return Ok(ApiResponse<bool>.Success(true, "Cập nhật thành công"));
             }
-            catch (DbUpdateException dbEx)
+            catch (DbUpdateException)
             {
-                return Conflict(ApiResponse<bool>.Failure($"Xung đột cập nhật danh mục: {dbEx.InnerException?.Message ?? dbEx.Message}", "CATEGORY_CONFLICT"));
+                return Conflict(ApiResponse<bool>.Failure("Không thể lưu danh mục do dữ liệu đã có thay đổi mới hơn trên hệ thống. Vui lòng tải lại dữ liệu và thử lại.", "CATEGORY_CONFLICT"));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, ApiResponse<bool>.Failure($"Lỗi: {ex.Message}", "ERR_UPDATE_CATEGORY"));
+                return StatusCode(500, ApiResponse<bool>.Failure("Hệ thống gặp sự cố khi cập nhật danh mục. Vui lòng thử lại sau.", "ERR_UPDATE_CATEGORY"));
             }
         }
 

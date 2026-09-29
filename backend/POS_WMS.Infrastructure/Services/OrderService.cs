@@ -223,6 +223,21 @@ namespace POS_WMS.Infrastructure.Services
                         balanceAfter,
                         userName
                     );
+
+                    await _context.SyncChanges.AddAsync(new SyncChange
+                    {
+                        EntityType = "Inventory",
+                        EntityId = detail.ProductId.ToString(),
+                        Operation = "Upsert",
+                        ChangedAt = DateTime.UtcNow,
+                        Version = DateTime.UtcNow.Ticks,
+                        DataJson = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            id = inventory?.Id ?? 0,
+                            productId = detail.ProductId,
+                            stockQuantity = balanceAfter
+                        })
+                    });
                 }
 
                 await _context.SaveChangesAsync();

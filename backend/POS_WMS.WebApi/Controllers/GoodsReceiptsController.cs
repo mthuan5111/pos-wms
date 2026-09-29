@@ -11,7 +11,7 @@ namespace POS_WMS.WebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize(Roles = "Admin,Manager,WarehouseStaff")]
+    [Authorize(Roles = "Admin,Manager,WarehouseStaff,DemoUser")]
     public class GoodsReceiptsController : ControllerBase
     {
         private readonly IGoodsReceiptService _goodsReceiptService;
@@ -40,6 +40,22 @@ namespace POS_WMS.WebApi.Controllers
                     receipts = receipts.Where(r => r.UserId == userId.Value).ToList();
                 }
 
+                bool canViewFinancials = User.IsInRole("Admin") || User.IsInRole("Manager");
+                if (!canViewFinancials)
+                {
+                    foreach (var r in receipts)
+                    {
+                        r.TotalAmount = null;
+                        if (r.Details != null)
+                        {
+                            foreach (var d in r.Details)
+                            {
+                                d.CostPrice = null;
+                            }
+                        }
+                    }
+                }
+
                 return Ok(ApiResponse<List<GoodsReceiptDto>>.Success(receipts));
             }
             catch (Exception ex)
@@ -54,6 +70,18 @@ namespace POS_WMS.WebApi.Controllers
             try
             {
                 var receipt = await _goodsReceiptService.GetByIdAsync(id);
+                bool canViewFinancials = User.IsInRole("Admin") || User.IsInRole("Manager");
+                if (!canViewFinancials && receipt != null)
+                {
+                    receipt.TotalAmount = null;
+                    if (receipt.Details != null)
+                    {
+                        foreach (var d in receipt.Details)
+                        {
+                            d.CostPrice = null;
+                        }
+                    }
+                }
                 return Ok(ApiResponse<GoodsReceiptDto>.Success(receipt));
             }
             catch (KeyNotFoundException)
@@ -67,6 +95,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost]
+        [Authorize(Roles = "Admin,Manager,WarehouseStaff")]
         public async Task<IActionResult> Create([FromBody] CreateGoodsReceiptRequestDto request)
         {
             try
@@ -95,6 +124,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost("sync")]
+        [Authorize(Roles = "Admin,Manager,WarehouseStaff")]
         public async Task<IActionResult> Sync([FromBody] GoodsReceiptSyncRequestDto request)
         {
             try

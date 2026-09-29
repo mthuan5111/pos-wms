@@ -429,6 +429,10 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("ImagePublicId")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
                     b.Property<string>("ImageUrl")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
@@ -555,6 +559,10 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<string>("OfflineReferenceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<int>("ProductId")
                         .HasColumnType("int");
 
@@ -575,6 +583,10 @@ namespace POS_WMS.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedAt");
+
+                    b.HasIndex("OfflineReferenceId")
+                        .IsUnique()
+                        .HasFilter("[OfflineReferenceId] IS NOT NULL");
 
                     b.HasIndex("ProductId");
 
@@ -647,6 +659,47 @@ namespace POS_WMS.Infrastructure.Migrations
                         .HasFilter("[TaxCode] IS NOT NULL");
 
                     b.ToTable("Suppliers");
+                });
+
+            modelBuilder.Entity("POS_WMS.Domain.Entities.SyncChange", b =>
+                {
+                    b.Property<long>("ChangeId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ChangeId"));
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DataJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("EntityId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Operation")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<long>("Version")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("ChangeId");
+
+                    b.HasIndex("ChangeId");
+
+                    b.HasIndex("EntityType", "ChangedAt");
+
+                    b.ToTable("SyncChanges");
                 });
 
             modelBuilder.Entity("POS_WMS.Domain.Entities.User", b =>

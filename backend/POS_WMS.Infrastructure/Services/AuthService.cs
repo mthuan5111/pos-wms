@@ -30,8 +30,70 @@ namespace POS_WMS.Infrastructure.Services
             _auditLogService = auditLogService;
         }
 
+        private static readonly System.Collections.Concurrent.ConcurrentQueue<DateTime> _demoLoginTimestamps = new();
+        private const int MaxDemoLoginsPerMinute = 25;
+
+        private bool AllowDemoLogin()
+        {
+            var now = DateTime.UtcNow;
+            var oneMinuteAgo = now.AddMinutes(-1);
+            while (_demoLoginTimestamps.TryPeek(out var timestamp) && timestamp < oneMinuteAgo)
+            {
+                _demoLoginTimestamps.TryDequeue(out _);
+            }
+            if (_demoLoginTimestamps.Count >= MaxDemoLoginsPerMinute)
+            {
+                return false;
+            }
+            _demoLoginTimestamps.Enqueue(now);
+            return true;
+        }
+
+        public async Task<AuthResponseDTO?> DemoLoginAsync()
+        {
+            if (!AllowDemoLogin())
+            {
+                return null;
+            }
+
+            var virtualDemoUser = new User
+            {
+                Id = 0, // Id = 0 triệt tiêu hoàn toàn nguy cơ va chạm với Users IDENTITY >= 1
+                Username = "demo_viewer",
+                Name = "Khách Trải Nghiệm",
+                Role = POS_WMS.Domain.Enums.UserRole.DemoUser,
+                IsActive = true
+            };
+            var demoAccessToken = GenerateAccessToken(virtualDemoUser, isDemo: true);
+
+            // Ghi nhận AuditLog an toàn với userId = null để không vi phạm FK_AuditLogs_Users_UserId
+            await _auditLogService.LogActionAsync(null, "demo_viewer", "DEMO_LOGIN", "User", null, "Đăng nhập chế độ trải nghiệm Demo", "SUCCESS");
+
+            return new AuthResponseDTO
+            {
+                Id = 0,
+                Username = virtualDemoUser.Username,
+                Name = virtualDemoUser.Name,
+                Role = virtualDemoUser.Role.ToString(),
+                AccessToken = demoAccessToken,
+                RefreshToken = string.Empty // Không cấp refresh token cho tài khoản Demo
+            };
+        }
+
         public async Task<AuthResponseDTO?> LoginAsync(LoginRequestDTO request)
         {
+            var configuredDemoPassword = _configuration["DemoAccount:Password"] ?? "Demo@123";
+            if (string.Equals(request.Username, "demo_viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                if (request.Password != configuredDemoPassword)
+                {
+                    await _auditLogService.LogActionAsync(null, "demo_viewer", "LOGIN_FAILURE", "User", null, "Sai mật khẩu Demo", "FAILED");
+                    return null;
+                }
+
+                return await DemoLoginAsync();
+            }
+
             var user = await _userRepository.GetByUsernameAsync(request.Username);
             if (user == null)
             {
@@ -84,13 +146,25 @@ namespace POS_WMS.Infrastructure.Services
                 _userRepository.Update(user);
                 await _unitOfWork.SaveChangesAsync();
             }
-            await _auditLogService.LogActionAsync(userId, username, "LOGOUT", "User", userId > 0 ? userId.ToString() : null, $"Đăng xuất khỏi hệ thống: {username}", "SUCCESS");
+            await _auditLogService.LogActionAsync(userId > 0 ? userId : null, username, "LOGOUT", "User", userId > 0 ? userId.ToString() : null, $"Đăng xuất khỏi hệ thống: {username}", "SUCCESS");
         }
 
         public async Task<AuthResponseDTO?> RefreshTokenAsync(TokenRequestDTO request)
         {
+            // Tài khoản Demo tuyệt đối không được cấp hoặc sử dụng refresh token
+            if (string.Equals(request.RefreshToken, "demo_virtual_refresh_token", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(request.RefreshToken))
+            {
+                return null;
+            }
+
             var principal = GetPrincipalFromExpiredToken(request.AccessToken);
             if (principal == null) return null;
+            if (principal.FindFirst("is_demo")?.Value == "true" || principal.FindFirst(ClaimTypes.Role)?.Value == "DemoUser")
+            {
+                return null;
+            }
+
             var username = principal.Identity?.Name;
             var user = await _userRepository.GetByUsernameAsync(username!);
             if (user == null || user.RefreshToken != request.RefreshToken || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
@@ -113,7 +187,7 @@ namespace POS_WMS.Infrastructure.Services
             };
         }
 
-        private string GenerateAccessToken(User user)
+        private string GenerateAccessToken(User user, bool isDemo = false)
         {
             var tokenHandler = new JwtSecurityTokenHandler();
             var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]!);
@@ -121,14 +195,17 @@ namespace POS_WMS.Infrastructure.Services
             var accessTokenMinutesStr = _configuration["Jwt:AccessTokenExpirationMinutes"];
             var accessTokenMinutes = double.TryParse(accessTokenMinutesStr, out var mins) ? mins : 60;
 
+            var claims = new List<Claim>
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Name, user.Username),
+                new Claim(ClaimTypes.Role, user.Role.ToString()),
+                new Claim("is_demo", isDemo ? "true" : "false")
+            };
+
             var tokenDescriptor = new SecurityTokenDescriptor
             {
-                Subject = new ClaimsIdentity(new[]
-                {
-                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                    new Claim(ClaimTypes.Name, user.Username),
-                    new Claim(ClaimTypes.Role, user.Role.ToString())
-                }),
+                Subject = new ClaimsIdentity(claims),
                 Expires = DateTime.UtcNow.AddMinutes(accessTokenMinutes),
                 Issuer = _configuration["Jwt:Issuer"],
                 Audience = _configuration["Jwt:Audience"],

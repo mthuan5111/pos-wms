@@ -31,6 +31,44 @@ export default function AppModal({
   destructive = false,
   fieldErrors,
 }: AppModalProps) {
+  const overlayRef = React.useRef<any>(null);
+
+  React.useEffect(() => {
+    if (!visible) return;
+
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      // Elevate the portal host to the very end of document.body so it is always on top
+      const timer = setTimeout(() => {
+        const node = overlayRef.current;
+        if (node && typeof (node as any).closest === 'function') {
+          const portalHost = (node as any).closest('body > div');
+          if (portalHost && portalHost.parentNode === document.body && document.body.lastChild !== portalHost) {
+            document.body.appendChild(portalHost);
+          }
+        }
+      }, 0);
+
+      // Priority Escape key listener to close top confirmation modal first
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (!loading) {
+            if (onCancel) onCancel();
+            else if (onConfirm) onConfirm();
+          }
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown, true);
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('keydown', handleKeyDown, true);
+      };
+    }
+  }, [visible, loading, onCancel, onConfirm]);
+
   const getIcon = () => {
     switch (type) {
       case 'success': return <Ionicons name="checkmark-circle-outline" size={32} color="#000" />;
@@ -41,18 +79,33 @@ export default function AppModal({
     }
   };
 
+  const handleRequestClose = () => {
+    if (!loading) {
+      if (onCancel) onCancel();
+      else if (onConfirm) onConfirm();
+    }
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent presentationStyle="overFullScreen" onRequestClose={destructive ? undefined : (onCancel || onConfirm)}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      presentationStyle="overFullScreen"
+      onRequestClose={handleRequestClose}
+    >
       <View
+        ref={overlayRef}
         testID="app-modal-overlay"
         style={{
           flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.6)',
+          backgroundColor: 'rgba(0,0,0,0.7)',
           justifyContent: 'center',
           alignItems: 'center',
-          zIndex: 999999,
-          elevation: 999999,
-          ...(Platform.OS === 'web' ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999999 } : {})
+          zIndex: 2147483647,
+          elevation: 2147483647,
+          ...(Platform.OS === 'web' ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2147483647, pointerEvents: 'auto' } : {})
         } as any}
       >
         <View style={{ backgroundColor: 'white', padding: 24, borderRadius: 2, borderWidth: 2, borderColor: '#000', width: '90%', maxWidth: 400, zIndex: 1000000, elevation: 1000000 } as any}>

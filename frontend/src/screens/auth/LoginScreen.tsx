@@ -1,14 +1,18 @@
-import { useModalStore } from '@/store/useModalStore';
-import React, { useState } from 'react';
-import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
+import { Ionicons } from '@expo/vector-icons';
 import CustomInput from '@/components/CustomInput';
 import CustomButton from '@/components/CustomButton';
 import { useAuthStore } from '@/store/authStore';
+import { useBootstrapStore } from '@/store/useBootstrapStore';
 import apiClient from '@/services/apiClient';
-import { pullMasterData } from '@/database/db';
+import { clearTokens } from '@/utils/token';
+import { parseApiError } from '@/utils/errorParser';
+import { logger } from '@/utils/logger';
+import { BUILD_INFO } from '@/config/buildInfo';
 
 const loginSchema = z.object({
     username: z.string().min(1, 'Tên đăng nhập không được để trống'),
@@ -21,6 +25,9 @@ export default function LoginScreen() {
     const { setAuthAsync } = useAuthStore();
     const [apiError, setApiError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
+
+    const passwordInputRef = useRef<TextInput>(null);
 
     const {
         control,
@@ -35,44 +42,63 @@ export default function LoginScreen() {
     });
 
     const onSubmit = async (data: LoginFormData) => {
+        if (isLoading) return;
         setIsLoading(true);
         setApiError(null);
         try {
-            console.log("[Auth] Đang gửi Request đăng nhập...");
+            await clearTokens();
+            logger.debug("Auth", "Đang gửi yêu cầu đăng nhập...");
             const response = await apiClient.post('/Auth/login', {
-                username: data.username,
+                username: data.username.trim(),
                 password: data.password,
             });
-            const result = response.data;
-            if (result.isSuccess) {
-                const { accessToken, refreshToken, ...userInfo } = result.data;
-                console.log("[Auth] Đăng nhập thành công, lưu Token vào Store...");
-                await setAuthAsync( userInfo, accessToken, refreshToken);
-                // Sau khi lưu token, RootNavigator sẽ tự động switch sang BootstrapScreen
+
+            if (response.data?.isSuccess && response.data?.data) {
+                const loginResult = response.data.data;
+                const { accessToken, refreshToken, ...userInfo } = loginResult;
+                logger.info("Auth", "Đăng nhập thành công, khởi tạo phiên người dùng", { role: userInfo.role });
+                useBootstrapStore.getState().reset();
+                await setAuthAsync(userInfo, accessToken, refreshToken);
             } else {
-                setApiError(result.message || 'Đăng nhập thất bại');
+                setApiError(response.data?.message || 'Đăng nhập không thành công. Vui lòng thử lại.');
             }
         } catch (error: any) {
-            if (error?.response?.status === 401) {
-                console.warn("[Auth] Đăng nhập thất bại: Tài khoản hoặc mật khẩu không chính xác.");
+            const parsed = parseApiError(error);
+            logger.warn("Auth", "Đăng nhập thất bại:", { title: parsed.title, message: parsed.message, status: parsed.statusCode });
+            setApiError(parsed.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleDemoLogin = async () => {
+        if (isLoading) return;
+        setIsLoading(true);
+        setApiError(null);
+        try {
+            await clearTokens();
+            logger.debug("Auth", "Bắt đầu đăng nhập trải nghiệm...");
+            const response = await apiClient.post('/Auth/demo-login');
+            const data = response.data?.data;
+            if (data?.accessToken) {
+                logger.info("Auth", "Đăng nhập trải nghiệm thành công");
+                await setAuthAsync(
+                    {
+                        id: data.id,
+                        username: data.username,
+                        name: data.name,
+                        role: data.role,
+                    },
+                    data.accessToken,
+                    data.refreshToken || ''
+                );
             } else {
-                console.error("[Auth] Lỗi Catch:", error.message, error.response?.status ?? "No response");
+                setApiError(response.data?.message || 'Không thể bắt đầu phiên trải nghiệm. Vui lòng thử lại sau.');
             }
-            if (error.isAxiosError) {
-                if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-                    setApiError('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
-                } else if (!error.response) {
-                    // This catches Network Error or ERR_CONNECTION_REFUSED
-                    setApiError('Không thể kết nối máy chủ. Vui lòng kiểm tra backend và địa chỉ API.');
-                } else if (error.response.status === 401) {
-                    setApiError('Tên đăng nhập hoặc mật khẩu không đúng.');
-                } else {
-                    setApiError(error.response?.data?.message || 'Lỗi mạng: Không thể kết nối máy chủ');
-                }
-            } else {
-                // Nếu không phải lỗi API, đây chính là lỗi Code/Thư viện!
-                setApiError('Lỗi hệ thống: ' + error.message);
-            }
+        } catch (error: any) {
+            const parsed = parseApiError(error);
+            logger.warn("Auth", "Đăng nhập trải nghiệm thất bại:", { title: parsed.title, message: parsed.message, status: parsed.statusCode });
+            setApiError(parsed.message);
         } finally {
             setIsLoading(false);
         }
@@ -110,12 +136,18 @@ export default function LoginScreen() {
                     {/* Thick separator */}
                     <View style={{ width: '100%', height: 3, backgroundColor: '#000', marginBottom: 24 }} />
 
-                    {/* Error Banner — inverted */}
+                    {/* Error Banner */}
                     {apiError && (
-                        <View className='bg-black p-3.5 mb-5'>
-                            <Text className='text-white text-center font-medium' style={{ fontSize: 13, letterSpacing: 0.5 }}>
+                        <View className='bg-black p-3.5 mb-5 flex-row items-center justify-between'>
+                            <Text className='text-white font-medium flex-1 mr-2' style={{ fontSize: 13, letterSpacing: 0.3 }}>
                                 {apiError}
                             </Text>
+                            <TouchableOpacity
+                                onPress={() => setApiError(null)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                                <Ionicons name="close" size={18} color="#fff" />
+                            </TouchableOpacity>
                         </View>
                     )}
 
@@ -124,7 +156,7 @@ export default function LoginScreen() {
                         <Controller
                             control={control}
                             name="username"
-                            render={({ field: { onChange, onBlur, value}}) => (
+                            render={({ field: { onChange, onBlur, value } }) => (
                                 <CustomInput
                                     label='Tên đăng nhập *'
                                     value={value}
@@ -133,6 +165,8 @@ export default function LoginScreen() {
                                     error={errors.username?.message}
                                     autoCapitalize='none'
                                     autoComplete="username"
+                                    returnKeyType="next"
+                                    onSubmitEditing={() => passwordInputRef.current?.focus()}
                                 />
                             )}
                         />
@@ -140,8 +174,9 @@ export default function LoginScreen() {
                         <Controller
                             control={control}
                             name="password"
-                            render={({ field: { onChange, onBlur, value}}) => (
+                            render={({ field: { onChange, onBlur, value } }) => (
                                 <CustomInput
+                                    ref={passwordInputRef}
                                     label='Mật khẩu *'
                                     value={value}
                                     onChangeText={onChange}
@@ -149,7 +184,22 @@ export default function LoginScreen() {
                                     error={errors.password?.message}
                                     autoCapitalize='none'
                                     autoComplete="current-password"
-                                    secureTextEntry
+                                    secureTextEntry={!showPassword}
+                                    returnKeyType="go"
+                                    onSubmitEditing={handleSubmit(onSubmit)}
+                                    rightElement={
+                                        <TouchableOpacity
+                                            onPress={() => setShowPassword(!showPassword)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                            accessibilityLabel={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
+                                        >
+                                            <Ionicons
+                                                name={showPassword ? "eye-off-outline" : "eye-outline"}
+                                                size={20}
+                                                color="#6b7280"
+                                            />
+                                        </TouchableOpacity>
+                                    }
                                 />
                             )}
                         />
@@ -158,6 +208,7 @@ export default function LoginScreen() {
                     {/* Login Button */}
                     <View className='mt-6'>
                         <CustomButton
+                            testID="login-submit-button"
                             title={isLoading ? 'Đang đăng nhập...' : 'Đăng nhập →'}
                             onPress={handleSubmit(onSubmit)}
                             disabled={isLoading}
@@ -165,8 +216,31 @@ export default function LoginScreen() {
                         />
                     </View>
 
+                    {/* Quick Demo Access Button */}
+                    <View className='mt-3'>
+                        <TouchableOpacity
+                            testID="quick-demo-login-button"
+                            accessibilityRole="button"
+                            accessibilityLabel="Đăng nhập trải nghiệm"
+                            onPress={handleDemoLogin}
+                            disabled={isLoading}
+                            className='py-2.5 px-3 border border-dashed border-neutral-300 rounded items-center bg-neutral-50 active:bg-neutral-100'
+                        >
+                            <Text className='text-xs font-semibold text-neutral-700'>
+                                👤 Đăng nhập trải nghiệm
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Build / Version Metadata */}
+                    <View className="items-center mt-6">
+                        <Text className="text-[11px] text-neutral-600 font-mono">
+                            v{BUILD_INFO.version}
+                        </Text>
+                    </View>
+
                     {/* Bottom decorative element */}
-                    <View className="items-center mt-8">
+                    <View className="items-center mt-4">
                         <View style={{ width: 24, height: 2, backgroundColor: '#E5E5E5' }} />
                     </View>
                 </View>
