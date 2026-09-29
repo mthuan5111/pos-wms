@@ -6,9 +6,11 @@ interface ShiftState {
   loading: boolean;
   error: string | null;
   fetchCurrentShift: () => Promise<ShiftDto | null>;
-  openShift: (remarks?: string) => Promise<ShiftDto>;
-  endShift: (shiftId: number, remarks?: string) => Promise<ShiftReportDto>;
+  openShift: (openingCash?: number, remarks?: string) => Promise<ShiftDto>;
+  endShift: (shiftId: number, actualCash?: number, remarks?: string) => Promise<ShiftReportDto>;
+  forceCloseShift: (shiftId: number, reason: string) => Promise<ShiftReportDto>;
   getShiftPreview: (shiftId: number) => Promise<ShiftReportDto>;
+  clearCurrentShift: () => void;
 }
 
 export const useShiftStore = create<ShiftState>((set) => ({
@@ -28,10 +30,10 @@ export const useShiftStore = create<ShiftState>((set) => ({
     }
   },
 
-  openShift: async (remarks?: string) => {
+  openShift: async (openingCash?: number, remarks?: string) => {
     set({ loading: true, error: null });
     try {
-      const shift = await shiftApi.openShift(remarks);
+      const shift = await shiftApi.openShift(openingCash, remarks);
       set({ currentShift: shift, loading: false });
       return shift;
     } catch (err: any) {
@@ -40,10 +42,10 @@ export const useShiftStore = create<ShiftState>((set) => ({
     }
   },
 
-  endShift: async (shiftId: number, remarks?: string) => {
+  endShift: async (shiftId: number, actualCash?: number, remarks?: string) => {
     set({ loading: true, error: null });
     try {
-      const report = await shiftApi.endShift(shiftId, remarks);
+      const report = await shiftApi.endShift(shiftId, actualCash, remarks);
       set({ currentShift: null, loading: false });
       return report;
     } catch (err: any) {
@@ -52,7 +54,23 @@ export const useShiftStore = create<ShiftState>((set) => ({
     }
   },
 
+  forceCloseShift: async (shiftId: number, reason: string) => {
+    set({ loading: true, error: null });
+    try {
+      const report = await shiftApi.forceCloseShift(shiftId, reason);
+      set({ currentShift: null, loading: false });
+      return report;
+    } catch (err: any) {
+      set({ loading: false, error: err.message || "Lỗi cưỡng chế kết thúc ca" });
+      throw err;
+    }
+  },
+
   getShiftPreview: async (shiftId: number) => {
     return await shiftApi.getShiftPreview(shiftId);
+  },
+
+  clearCurrentShift: () => {
+    set({ currentShift: null, error: null });
   }
 }));

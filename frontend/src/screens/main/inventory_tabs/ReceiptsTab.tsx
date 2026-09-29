@@ -21,6 +21,7 @@ import { useDemoSandboxStore } from "@/store/useDemoSandboxStore";
 import { generateGoodsReceiptHtml } from "@/utils/printTemplates";
 import { printDocument } from "@/utils/printService";
 import { isDemoRole } from "@/utils/roleUtils";
+import RestrictedValue from "@/components/RestrictedValue";
 
 export interface LocalGoodsReceiptRow {
   OfflineReferenceId: string;
@@ -454,8 +455,8 @@ export default function ReceiptsTab() {
             }}
             className="bg-white p-4 mb-4 border-2 border-black"
           >
-            <View className="flex-row justify-between items-center mb-2 pb-2 border-b-2 border-black">
-              <View className="flex-1 mr-2">
+            <View className="flex-row justify-between items-center mb-2 pb-2 border-b-2 border-black gap-2 flex-wrap">
+              <View className="flex-1 mr-2 min-w-[120px]">
                 <Text className="font-bold text-sm text-black" numberOfLines={1}>
                   {item.OfflineReferenceId}
                 </Text>
@@ -465,13 +466,12 @@ export default function ReceiptsTab() {
                   </Text>
                 ) : null}
               </View>
-              <Text className="text-black font-black font-serif text-lg">
-                {item.OfflineReferenceId.startsWith("DEMO-")
-                  ? `${formatCurrency(item.TotalAmount)} (Mô phỏng)`
-                  : canViewCostPrice && item.TotalAmount != null
-                    ? formatCurrency(item.TotalAmount)
-                    : "Không có quyền xem"}
-              </Text>
+              <RestrictedValue
+                hasPermission={canViewCostPrice}
+                value={item.TotalAmount}
+                isDemo={item.OfflineReferenceId.startsWith("DEMO-")}
+                size="lg"
+              />
             </View>
 
             <View className="flex-row items-center mb-1">
@@ -769,7 +769,7 @@ export default function ReceiptsTab() {
                 <Text className="font-black uppercase text-xs tracking-wider text-black">
                   TỔNG CỘNG TIỀN HÀNG:
                 </Text>
-                <Text className="font-black font-serif text-xl text-black">
+                <Text className="font-black text-xl text-black">
                   {formatCurrency(totalReceiptAmount)}
                 </Text>
               </View>
@@ -913,15 +913,14 @@ export default function ReceiptsTab() {
                 ))}
               </View>
 
-              <View className="flex-row justify-between items-center p-3 bg-gray-50 border border-black">
+              <View className="flex-row justify-between items-center p-3 bg-gray-50 border border-black gap-2">
                 <Text className="font-bold uppercase text-xs text-black">TỔNG CỘNG:</Text>
-                <Text className="font-black font-serif text-lg text-black">
-                  {selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')
-                    ? `${formatCurrency(selectedReceipt.TotalAmount)} (Mô phỏng)`
-                    : canViewCostPrice && selectedReceipt?.TotalAmount != null
-                      ? formatCurrency(selectedReceipt.TotalAmount)
-                      : "Không có quyền xem"}
-                </Text>
+                <RestrictedValue
+                  hasPermission={canViewCostPrice}
+                  value={selectedReceipt?.TotalAmount}
+                  isDemo={selectedReceipt?.OfflineReferenceId?.startsWith('DEMO-')}
+                  size="lg"
+                />
               </View>
             </ScrollView>
 

@@ -54,6 +54,10 @@ interface DemoSandboxState {
     shiftCode: string;
     startedAt: string;
     endedAt: string;
+    startingCash: number;
+    cashRevenue: number;
+    qrRevenue: number;
+    endingCash: number;
     expectedCash: number;
     difference: number;
     totalRevenue: number;
@@ -357,6 +361,10 @@ export const useDemoSandboxStore = create<DemoSandboxState>((set, get) => ({
       shiftCode: shift.shiftCode,
       startedAt: shift.startedAt,
       endedAt,
+      startingCash: shift.startingCash,
+      cashRevenue: shift.cashRevenue,
+      qrRevenue: shift.qrRevenue,
+      endingCash,
       expectedCash,
       difference,
       totalRevenue: shift.totalRevenue,
@@ -370,10 +378,16 @@ export const useDemoSandboxStore = create<DemoSandboxState>((set, get) => ({
       sessionId = await get().initSession();
     }
 
+    const shift = get().activeShift;
+    if (!shift || shift.status !== 'Open') {
+      const err: any = new Error('Bạn chưa mở ca làm việc. Vui lòng mở ca trước khi thực hiện thanh toán.');
+      err.code = 'SHIFT_NOT_OPEN';
+      throw err;
+    }
+
     const offlineReferenceId = `DEMO-ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     const createdAt = new Date().toISOString();
-    const shift = get().activeShift;
-    const shiftCode = shift?.shiftCode || null;
+    const shiftCode = shift.shiftCode;
 
     const db = await getDBConnection();
     await db.withTransactionAsync(async () => {

@@ -35,19 +35,36 @@ namespace POS_WMS.WebApi.Controllers
         [HttpGet("current")]
         public async Task<IActionResult> GetCurrentShift()
         {
+            var role = GetUserRole();
+            if (role.Equals("WarehouseStaff", StringComparison.OrdinalIgnoreCase))
+            {
+                return Ok(ApiResponse<ShiftDto?>.Success(null, "Thủ kho không áp dụng ca làm việc thu ngân"));
+            }
+
             var userId = GetUserId();
             var shift = await _shiftService.GetCurrentShiftAsync(userId);
             return Ok(ApiResponse<ShiftDto?>.Success(shift, "Lấy thông tin ca hiện tại thành công"));
         }
 
         [HttpPost("open")]
-        [Authorize(Roles = "Admin,Manager,Cashier,WarehouseStaff")]
+        [Authorize(Roles = "Admin,Manager,Cashier")]
         public async Task<IActionResult> OpenShift([FromBody] OpenShiftRequestDto request)
         {
-            var userId = GetUserId();
-            var role = GetUserRole();
-            var shift = await _shiftService.OpenShiftAsync(userId, role, request);
-            return Ok(ApiResponse<ShiftDto>.Success(shift, "Mở ca làm việc thành công"));
+            try
+            {
+                var userId = GetUserId();
+                var role = GetUserRole();
+                var shift = await _shiftService.OpenShiftAsync(userId, role, request);
+                return Ok(ApiResponse<ShiftDto>.Success(shift, "Mở ca làm việc thành công"));
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ApiResponse<ShiftDto>.Failure(ex.Message, "INVALID_OPENING_CASH"));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<ShiftDto>.Failure($"Lỗi mở ca: {ex.Message}"));
+            }
         }
 
         [HttpGet("{id}/preview")]
@@ -70,7 +87,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost("{id}/end")]
-        [Authorize(Roles = "Admin,Manager,Cashier,WarehouseStaff")]
+        [Authorize(Roles = "Admin,Manager,Cashier")]
         public async Task<IActionResult> EndShift(int id, [FromBody] EndShiftRequestDto request)
         {
             try
@@ -83,6 +100,10 @@ namespace POS_WMS.WebApi.Controllers
             {
                 return NotFound(ApiResponse<ShiftReportDto>.Failure(ex.Message, "SHIFT_NOT_FOUND"));
             }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ApiResponse<ShiftReportDto>.Failure(ex.Message, "INVALID_ACTUAL_CASH"));
+            }
             catch (Exception ex)
             {
                 return StatusCode(500, ApiResponse<ShiftReportDto>.Failure($"Lỗi: {ex.Message}"));
@@ -90,7 +111,7 @@ namespace POS_WMS.WebApi.Controllers
         }
 
         [HttpPost("close")]
-        [Authorize(Roles = "Admin,Manager,Cashier,WarehouseStaff")]
+        [Authorize(Roles = "Admin,Manager,Cashier")]
         public async Task<IActionResult> CloseCurrentShift([FromBody] EndShiftRequestDto request)
         {
             try
@@ -104,9 +125,42 @@ namespace POS_WMS.WebApi.Controllers
                 var report = await _shiftService.EndShiftAsync(currentShift.Id, userId, request);
                 return Ok(ApiResponse<ShiftReportDto>.Success(report, "Đã kết thúc ca làm việc."));
             }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ApiResponse<ShiftReportDto>.Failure(ex.Message, "INVALID_ACTUAL_CASH"));
+            }
             catch (Exception ex)
             {
                 return StatusCode(500, ApiResponse<ShiftReportDto>.Failure($"Lỗi: {ex.Message}"));
+            }
+        }
+
+        [HttpPost("{id}/force-close")]
+        [Authorize(Roles = "Admin,Manager")]
+        public async Task<IActionResult> ForceCloseShift(int id, [FromBody] ForceCloseShiftRequestDto request)
+        {
+            try
+            {
+                var userId = GetUserId();
+                var role = GetUserRole();
+                var report = await _shiftService.ForceCloseShiftAsync(id, userId, role, request);
+                return Ok(ApiResponse<ShiftReportDto>.Success(report, "Đã kết thúc ca làm việc cưỡng chế thành công."));
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(ApiResponse<ShiftReportDto>.Failure(ex.Message, "SHIFT_NOT_FOUND"));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, ApiResponse<ShiftReportDto>.Failure(ex.Message, "FORBIDDEN"));
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ApiResponse<ShiftReportDto>.Failure(ex.Message, "REASON_REQUIRED"));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<ShiftReportDto>.Failure($"Lỗi kết ca cưỡng chế: {ex.Message}"));
             }
         }
 
