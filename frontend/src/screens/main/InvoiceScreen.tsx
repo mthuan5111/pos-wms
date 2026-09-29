@@ -26,6 +26,7 @@ import { formatVietnamDateTime } from "@/utils/timezone";
 import { generateSalesReceiptHtml, generateGoodsReceiptHtml } from "@/utils/printTemplates";
 import { printDocument } from "@/utils/printService";
 import { isDemoRole } from "@/utils/roleUtils";
+import RestrictedValue from "@/components/RestrictedValue";
 
 type TabType = "sales" | "imports";
 
@@ -773,9 +774,9 @@ export default function InvoiceScreen() {
       activeOpacity={0.8}
       className="bg-white p-5 mb-4 border-2 border-black"
     >
-      <View className="flex-row justify-between items-center mb-3">
-        <Text className="font-bold text-lg text-black uppercase tracking-wider">{item.offlineId}</Text>
-        <Text className="text-black font-black font-serif text-lg">{formatCurrency(item.totalAmount)}</Text>
+      <View className="flex-row justify-between items-center mb-3 gap-2 flex-wrap">
+        <Text className="font-bold text-lg text-black uppercase tracking-wider flex-shrink mr-2" numberOfLines={1}>{item.offlineId}</Text>
+        <Text className="text-black font-black text-lg">{formatCurrency(item.totalAmount)}</Text>
       </View>
       <View className="flex-row items-center mb-2">
         <Ionicons name="time-outline" size={16} color="#000" style={{ width: 24 }} />
@@ -815,15 +816,14 @@ export default function InvoiceScreen() {
       activeOpacity={0.8}
       className="bg-white p-5 mb-4 border-2 border-black"
     >
-      <View className="flex-row justify-between items-center mb-3">
-        <Text className="font-bold text-lg text-black uppercase tracking-wider">{item.offlineId}</Text>
-        <Text className="text-black font-black font-serif text-lg">
-          {item.offlineId.startsWith('DEMO-')
-            ? `${formatCurrency(item.totalAmount)} (Mô phỏng)`
-            : canViewCostPrice && item.totalAmount != null
-              ? formatCurrency(item.totalAmount)
-              : "Không có quyền xem"}
-        </Text>
+      <View className="flex-row justify-between items-center mb-3 gap-2 flex-wrap">
+        <Text className="font-bold text-lg text-black uppercase tracking-wider flex-shrink mr-2" numberOfLines={1}>{item.offlineId}</Text>
+        <RestrictedValue
+          hasPermission={canViewCostPrice}
+          value={item.totalAmount}
+          isDemo={item.offlineId.startsWith('DEMO-')}
+          size="lg"
+        />
       </View>
       <View className="flex-row items-center mb-2">
         <Ionicons name="time-outline" size={16} color="#000" style={{ width: 24 }} />
@@ -1011,7 +1011,7 @@ export default function InvoiceScreen() {
 
               <View className="flex-row justify-between items-center py-3 border-t-2 border-black">
                 <Text className="font-black text-sm uppercase">Tổng thanh toán:</Text>
-                <Text className="font-black font-serif text-xl text-black">{formatCurrency(selectedOrder?.totalAmount || 0)}</Text>
+                <Text className="font-black text-xl text-black">{formatCurrency(selectedOrder?.totalAmount || 0)}</Text>
               </View>
 
               <View className="flex-row gap-2 mt-4 pt-3 border-t-2 border-black">
@@ -1097,15 +1097,14 @@ export default function InvoiceScreen() {
                 )}
               </View>
 
-              <View className="flex-row justify-between items-center py-3 border-t-2 border-black">
+              <View className="flex-row justify-between items-center py-3 border-t-2 border-black gap-2">
                 <Text className="font-black text-sm uppercase">Tổng tiền:</Text>
-                <Text className="font-black font-serif text-xl text-black">
-                  {selectedReceipt?.offlineId?.startsWith('DEMO-')
-                    ? `${formatCurrency(selectedReceipt?.totalAmount || 0)} (Mô phỏng)`
-                    : canViewCostPrice && selectedReceipt?.totalAmount != null
-                      ? formatCurrency(selectedReceipt.totalAmount)
-                      : "Không có quyền xem"}
-                </Text>
+                <RestrictedValue
+                  hasPermission={canViewCostPrice}
+                  value={selectedReceipt?.totalAmount}
+                  isDemo={selectedReceipt?.offlineId?.startsWith('DEMO-')}
+                  size="xl"
+                />
               </View>
 
               <View className="flex-row gap-2 mt-4 pt-3 border-t-2 border-black">

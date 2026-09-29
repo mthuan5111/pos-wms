@@ -38,6 +38,15 @@ namespace POS_WMS.Infrastructure.Services
 
         public async Task<ShiftDto> OpenShiftAsync(int userId, string role, OpenShiftRequestDto request)
         {
+            if (request != null && request.OpeningCash < 0)
+            {
+                throw new ArgumentException("Số tiền đầu ca không được là số âm.");
+            }
+            if (request != null && request.OpeningCash > 10_000_000_000m)
+            {
+                throw new ArgumentException("Số tiền đầu ca vượt quá giới hạn cho phép.");
+            }
+
             // Idempotency: if already has an open shift, return it
             var existing = await _context.Shifts
                 .Include(s => s.User)
@@ -50,6 +59,14 @@ namespace POS_WMS.Infrastructure.Services
                 return MapToDto(existing);
             }
 
+            decimal openingCash = request?.OpeningCash ?? 0;
+            var initialSnapshot = JsonSerializer.Serialize(new
+            {
+                OpeningCash = openingCash,
+                StartedAt = DateTime.UtcNow,
+                Status = "Open"
+            });
+
             var user = await _context.Users.FindAsync(userId);
             var shift = new Shift
             {
@@ -59,6 +76,7 @@ namespace POS_WMS.Infrastructure.Services
                 Status = ShiftStatus.Open,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
+                FinalReportSnapshot = initialSnapshot,
                 ClosingRemarks = request?.Remarks
             };
 
@@ -72,7 +90,7 @@ namespace POS_WMS.Infrastructure.Services
                 "SHIFT_OPENED",
                 "Shift",
                 shift.Id.ToString(),
-                $"Mở ca làm việc #{shift.Id} vai trò {shift.Role} cho {userName}",
+                $"Mở ca làm việc #{shift.Id} vai trò {shift.Role} cho {userName}. Tiền đầu ca: {openingCash:N0} đ",
                 "SUCCESS"
             );
 
@@ -96,7 +114,7 @@ namespace POS_WMS.Infrastructure.Services
                 try
                 {
                     var cached = JsonSerializer.Deserialize<ShiftReportDto>(shift.FinalReportSnapshot);
-                    if (cached != null) return cached;
+                    if (cached != null && shift.Status == ShiftStatus.Closed) return cached;
                 }
                 catch { }
             }
@@ -115,6 +133,11 @@ namespace POS_WMS.Infrastructure.Services
                 throw new KeyNotFoundException("Không tìm thấy ca làm việc");
             }
 
+            if (request?.ActualCash.HasValue == true && request.ActualCash.Value < 0)
+            {
+                throw new ArgumentException("Số tiền kiểm đếm thực tế không được là số âm.");
+            }
+
             // Idempotency: if already closed, return locked snapshot
             if (shift.Status == ShiftStatus.Closed && !string.IsNullOrWhiteSpace(shift.FinalReportSnapshot))
             {
@@ -126,18 +149,22 @@ namespace POS_WMS.Infrastructure.Services
                 catch { }
             }
 
-            // Calculate reconciled report
+            // Calculate reconciled report with cash drawer till reconciliation
             var report = await CalculateShiftReportAsync(shift);
             report.EndedAt = DateTime.UtcNow;
             report.Status = "Closed";
-            report.ClosingRemarks = request?.ClosingRemarks;
+            report.ClosingRemarks = request?.ClosingRemarks ?? shift.ClosingRemarks;
+            report.ActualCash = request?.ActualCash;
+            report.Difference = request?.ActualCash.HasValue == true
+                ? request.ActualCash.Value - report.ExpectedCash
+                : null;
 
             var snapshotJson = JsonSerializer.Serialize(report);
 
             shift.Status = ShiftStatus.Closed;
             shift.EndedAt = report.EndedAt;
             shift.FinalReportSnapshot = snapshotJson;
-            shift.ClosingRemarks = request?.ClosingRemarks;
+            shift.ClosingRemarks = report.ClosingRemarks;
             shift.UpdatedAt = DateTime.UtcNow;
 
             _context.Shifts.Update(shift);
@@ -150,7 +177,75 @@ namespace POS_WMS.Infrastructure.Services
                 "SHIFT_CLOSED",
                 "Shift",
                 shift.Id.ToString(),
-                $"Kết thúc ca làm việc #{shift.Id} bởi {userName}",
+                $"Kết thúc ca làm việc #{shift.Id} bởi {userName}. Doanh thu: {report.TotalRevenue:N0} đ. Dự kiến két: {report.ExpectedCash:N0} đ. Thực tế: {report.ActualCash?.ToString("N0") ?? "N/A"} đ. Chênh lệch: {report.Difference?.ToString("N0") ?? "N/A"} đ",
+                "SUCCESS"
+            );
+
+            return report;
+        }
+
+        public async Task<ShiftReportDto> ForceCloseShiftAsync(int shiftId, int callerUserId, string callerRole, ForceCloseShiftRequestDto request)
+        {
+            if (!callerRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
+                !callerRole.Equals("Manager", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new UnauthorizedAccessException("Chỉ Quản lý hoặc Quản trị viên mới có quyền kết ca cưỡng chế.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request?.Reason))
+            {
+                throw new ArgumentException("Bắt buộc nhập lý do đóng ca cưỡng chế.");
+            }
+
+            var shift = await _context.Shifts
+                .Include(s => s.User)
+                .FirstOrDefaultAsync(s => s.Id == shiftId);
+
+            if (shift == null)
+            {
+                throw new KeyNotFoundException("Không tìm thấy ca làm việc");
+            }
+
+            if (shift.Status == ShiftStatus.Closed && !string.IsNullOrWhiteSpace(shift.FinalReportSnapshot))
+            {
+                try
+                {
+                    var cached = JsonSerializer.Deserialize<ShiftReportDto>(shift.FinalReportSnapshot);
+                    if (cached != null) return cached;
+                }
+                catch { }
+            }
+
+            var callerUser = await _context.Users.FindAsync(callerUserId);
+            var callerName = callerUser?.Name ?? callerUser?.Username ?? "Quản lý";
+            var shiftUserName = shift.User?.Name ?? shift.User?.Username ?? "Unknown";
+
+            var report = await CalculateShiftReportAsync(shift);
+            report.EndedAt = DateTime.UtcNow;
+            report.Status = "Closed";
+            report.ClosedByUserId = callerUserId;
+            report.ClosedByUserName = callerName;
+            report.ForceCloseReason = request.Reason.Trim();
+            report.ClosingRemarks = $"[ĐÓNG CA CƯỠNG CHẾ bởi {callerName}]: {request.Reason.Trim()}";
+
+            var snapshotJson = JsonSerializer.Serialize(report);
+
+            shift.Status = ShiftStatus.Closed;
+            shift.EndedAt = report.EndedAt;
+            shift.FinalReportSnapshot = snapshotJson;
+            shift.ClosingRemarks = report.ClosingRemarks;
+            shift.UpdatedAt = DateTime.UtcNow;
+
+            _context.Shifts.Update(shift);
+            await _context.SaveChangesAsync();
+
+            await _auditLogService.LogActionAsync(
+                callerUserId,
+                callerName,
+                "SHIFT_FORCE_CLOSED",
+                "Shift",
+                shift.Id.ToString(),
+                $"Đóng ca cưỡng chế ca #{shift.Id} của {shiftUserName} bởi {callerName}. Lý do: {request.Reason.Trim()}",
                 "SUCCESS"
             );
 
@@ -207,6 +302,21 @@ namespace POS_WMS.Infrastructure.Services
 
         private async Task<ShiftReportDto> CalculateShiftReportAsync(Shift shift)
         {
+            decimal openingCash = 0;
+            if (!string.IsNullOrWhiteSpace(shift.FinalReportSnapshot))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(shift.FinalReportSnapshot);
+                    if (doc.RootElement.TryGetProperty("OpeningCash", out var prop) ||
+                        doc.RootElement.TryGetProperty("openingCash", out prop))
+                    {
+                        openingCash = prop.GetDecimal();
+                    }
+                }
+                catch { }
+            }
+
             var orders = await _context.Orders
                 .Where(o => o.ShiftId == shift.Id || (o.UserId == shift.UserId && o.OrderDate >= shift.StartedAt && (shift.EndedAt == null || o.OrderDate <= shift.EndedAt.Value)))
                 .ToListAsync();
@@ -245,12 +355,15 @@ namespace POS_WMS.Infrastructure.Services
                 Status = shift.Status.ToString(),
                 ClosingRemarks = shift.ClosingRemarks,
 
-                OrderCount = orders.Count,
-                CompletedOrderCount = completedOrders.Count,
-                CanceledOrderCount = canceledOrders.Count,
+                OpeningCash = openingCash,
                 CashRevenue = cashRev,
                 QrRevenue = qrRev,
                 TotalRevenue = cashRev + qrRev,
+                ExpectedCash = openingCash + cashRev,
+
+                OrderCount = orders.Count,
+                CompletedOrderCount = completedOrders.Count,
+                CanceledOrderCount = canceledOrders.Count,
                 PendingSyncCount = 0,
 
                 ReceiptCount = receipts.Count,
@@ -265,6 +378,21 @@ namespace POS_WMS.Infrastructure.Services
 
         private ShiftDto MapToDto(Shift shift, string? userName = null)
         {
+            decimal openingCash = 0;
+            if (!string.IsNullOrWhiteSpace(shift.FinalReportSnapshot))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(shift.FinalReportSnapshot);
+                    if (doc.RootElement.TryGetProperty("OpeningCash", out var prop) ||
+                        doc.RootElement.TryGetProperty("openingCash", out prop))
+                    {
+                        openingCash = prop.GetDecimal();
+                    }
+                }
+                catch { }
+            }
+
             return new ShiftDto
             {
                 Id = shift.Id,
@@ -274,6 +402,7 @@ namespace POS_WMS.Infrastructure.Services
                 StartedAt = shift.StartedAt,
                 EndedAt = shift.EndedAt,
                 Status = shift.Status.ToString(),
+                OpeningCash = openingCash,
                 FinalReportSnapshot = shift.FinalReportSnapshot,
                 ClosingRemarks = shift.ClosingRemarks
             };

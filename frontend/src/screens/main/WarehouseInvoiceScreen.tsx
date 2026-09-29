@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { getServerReceipts } from "@/services/goodsReceiptApi";
 import { useAuthStore } from "@/store/authStore";
+import RestrictedValue from "@/components/RestrictedValue";
 
 export interface ServerGoodsReceiptDto {
   id: number;
@@ -81,11 +82,13 @@ export default function WarehouseInvoiceScreen() {
         showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <View className="bg-white p-4 mb-4 border-2 border-black">
-            <View className="flex-row justify-between items-center mb-2 pb-2 border-b-2 border-black">
-              <Text className="font-bold text-lg text-black">{item.offlineReferenceId || `ID: ${item.id}`}</Text>
-              <Text className="text-black font-black font-serif text-lg">
-                {canViewCostPrice && item.totalAmount != null ? formatCurrency(item.totalAmount) : "Không có quyền xem"}
-              </Text>
+            <View className="flex-row justify-between items-center mb-2 pb-2 border-b-2 border-black gap-2 flex-wrap">
+              <Text className="font-bold text-lg text-black flex-shrink mr-2" numberOfLines={1}>{item.offlineReferenceId || `ID: ${item.id}`}</Text>
+              <RestrictedValue
+                hasPermission={canViewCostPrice}
+                value={item.totalAmount}
+                size="lg"
+              />
             </View>
             <View className="flex-row items-center mb-1">
               <Ionicons name="time" size={14} color="#000" style={{ width: 20 }} />

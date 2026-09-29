@@ -98,6 +98,8 @@ export interface ShiftReportPrintData {
   expectedEndingCash?: number;
   actualEndingCash?: number;
   difference?: number;
+  closedByUserName?: string | null;
+  forceCloseReason?: string | null;
 }
 
 /**
@@ -709,6 +711,36 @@ export function generateShiftReportHtml(
             <span>TỔNG DOANH THU CA:</span>
             <span>${formatVnd(data.totalRevenue)}</span>
           </div>
+
+          <div class="section-title">ĐỐI SOÁT TIỀN MẶT TRONG KÉT (TILL RECONCILIATION)</div>
+          <div class="info-row">
+            <span class="info-label">Tiền mặt đầu ca:</span>
+            <span class="info-value bold">${formatVnd(data.openingCash ?? 0)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Tiền mặt thu bán hàng:</span>
+            <span class="info-value bold">+${formatVnd(data.cashRevenue ?? 0)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Tiền mặt dự kiến trong két:</span>
+            <span class="info-value bold">${formatVnd(data.expectedEndingCash ?? ((data.openingCash ?? 0) + (data.cashRevenue ?? 0)))}</span>
+          </div>
+          ${data.actualEndingCash != null ? `
+          <div class="info-row">
+            <span class="info-label">Tiền mặt thực tế kiểm đếm:</span>
+            <span class="info-value bold">${formatVnd(data.actualEndingCash)}</span>
+          </div>
+          <div class="summary-row ${(data.difference ?? 0) === 0 ? '' : 'highlight'}">
+            <span>CHÊNH LỆCH KÉT (THỰC TẾ - DỰ KIẾN):</span>
+            <span class="bold">${(data.difference ?? 0) > 0 ? '+' : ''}${formatVnd(data.difference ?? 0)}</span>
+          </div>
+          ` : ''}
+          ${data.forceCloseReason ? `
+          <div class="info-row" style="color: #b91c1c; font-weight: bold; margin-top: 6px;">
+            <span class="info-label">[ĐÓNG CA CƯỠNG CHẾ BỞI]:</span>
+            <span class="info-value">${escapeHtml(data.closedByUserName || 'Quản lý')} (Lý do: ${escapeHtml(data.forceCloseReason)})</span>
+          </div>
+          ` : ''}
         ` : ''}
 
         ${(isWarehouseRole || data.role === 'Admin' || data.role === 'Manager') ? `

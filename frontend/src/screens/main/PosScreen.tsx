@@ -20,6 +20,7 @@ import {
   Image,
   ScrollView,
   TextInput,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
@@ -63,6 +64,22 @@ export default function PosScreen() {
   const isDesktop = useIsDesktop();
   const insets = useSafeAreaInsets();
   const currentShift = useShiftStore((state) => state.currentShift);
+  const demoShift = useDemoSandboxStore((state) => state.activeShift);
+  const { user } = useAuthStore();
+  const isDemo = isDemoUser(user);
+
+  const hasActiveShift = isDemo
+    ? Boolean(demoShift && demoShift.status === 'Open')
+    : Boolean(currentShift && (currentShift.status === 'Open' || (currentShift as any).Status === 'Open'));
+  const activeShiftId = isDemo
+    ? (demoShift?.shiftCode || 'DEMO-SHIFT')
+    : (currentShift?.id || (currentShift as any)?.Id);
+
+  const [showOpenShiftModal, setShowOpenShiftModal] = useState(false);
+  const [openingCashInput, setOpeningCashInput] = useState("0");
+  const [openingRemarksInput, setOpeningRemarksInput] = useState("");
+  const [isOpeningShift, setIsOpeningShift] = useState(false);
+
   const [mobileTab, setMobileTab] = useState<'products' | 'cart'>('products');
 
   const [query, setQuery] = useState("");
@@ -74,8 +91,6 @@ export default function PosScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [customerPhone, setCustomerPhone] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const { user } = useAuthStore();
-  const isDemo = isDemoUser(user);
   const sandboxStockDeltas = useDemoSandboxStore(state => state.sandboxStockDeltas);
   const {
     items,
@@ -88,6 +103,9 @@ export default function PosScreen() {
 
   const loadData = async () => {
     try {
+      if (!isDemo && user?.role !== 'WarehouseStaff') {
+        useShiftStore.getState().fetchCurrentShift().catch(() => {});
+      }
       const cats = await getLocalCategories();
       setCategories(cats as Category[]);
       const prods = await getLocalProducts();
@@ -247,8 +265,51 @@ export default function PosScreen() {
   const [isSubmittingCheckout, setIsSubmittingCheckout] = useState(false);
   const isCheckingOutRef = useRef(false);
 
+  const handleConfirmOpenShift = async () => {
+    if (isOpeningShift) return;
+    setIsOpeningShift(true);
+    const parsedCash = parseFloat(openingCashInput.replace(/[^0-9]/g, "")) || 0;
+    try {
+      if (isDemo) {
+        await useDemoSandboxStore.getState().openShift(parsedCash);
+      } else {
+        await useShiftStore.getState().openShift(parsedCash, openingRemarksInput);
+      }
+      setShowOpenShiftModal(false);
+      setOpeningCashInput("0");
+      setOpeningRemarksInput("");
+      useModalStore.getState().showModal({
+        title: "Mở ca thành công",
+        message: `Đã mở ca làm việc với số tiền đầu ca: ${parsedCash.toLocaleString("vi-VN")} đ. Bạn có thể tiếp tục thanh toán đơn hàng.`,
+        type: "success"
+      });
+    } catch (err: any) {
+      useModalStore.getState().showModal({
+        title: "Lỗi mở ca",
+        message: err.response?.data?.message || err.message || "Không thể mở ca làm việc.",
+        type: "error"
+      });
+    } finally {
+      setIsOpeningShift(false);
+    }
+  };
+
   const handleCheckoutClick = () => {
     if (items.length === 0) {
+      return;
+    }
+
+    if (!hasActiveShift) {
+      useModalStore.getState().showModal({
+        title: "Chưa mở ca làm việc",
+        message: "Bạn chưa mở ca làm việc. Vui lòng mở ca trước khi thực hiện thanh toán.",
+        type: "warning",
+        confirmText: "MỞ CA NGAY",
+        cancelText: "ĐÓNG",
+        onConfirm: () => {
+          setShowOpenShiftModal(true);
+        }
+      });
       return;
     }
 
@@ -362,7 +423,27 @@ export default function PosScreen() {
         }
       }
       const eName = user?.name || user?.username || "Không rõ";
-      const shiftId = currentShift?.id || (currentShift as any)?.Id || null;
+      const freshShift = isDemo
+        ? useDemoSandboxStore.getState().activeShift
+        : useShiftStore.getState().currentShift;
+      const shiftId = isDemo
+        ? (freshShift as any)?.shiftCode || null
+        : ((freshShift as any)?.id || (freshShift as any)?.Id || null);
+
+      if (!isDemo && !shiftId) {
+        setIsCheckoutModalVisible(false);
+        useModalStore.getState().showModal({
+          title: "Chưa mở ca làm việc",
+          message: "Bạn chưa mở ca làm việc. Vui lòng mở ca trước khi thực hiện thanh toán.",
+          type: "warning",
+          confirmText: "MỞ CA NGAY",
+          cancelText: "ĐÓNG",
+          onConfirm: () => {
+            setShowOpenShiftModal(true);
+          }
+        });
+        return;
+      }
 
       // Build rich snapshot before cart is cleared
       const printSnapshotItems = items.map((item, idx) => ({
@@ -446,9 +527,18 @@ export default function PosScreen() {
       useCacheInvalidationStore.getState().invalidateInventory();
       useCacheInvalidationStore.getState().invalidateProduct();
       useGlobalSyncStore.getState().syncNow("order-created");
-    } catch (error) {
+    } catch (error: any) {
       console.error("[Pos] Lỗi khi lưu đơn hàng", error);
-      useModalStore.getState().showModal({ title: "Lỗi", message: "Không thể lưu đơn hàng xuống thiết bị", type: "error" });
+      const isShiftErr = error?.code === 'SHIFT_NOT_OPEN' || error?.response?.data?.code === 'SHIFT_NOT_OPEN';
+      useModalStore.getState().showModal({
+        title: isShiftErr ? "Chưa mở ca làm việc" : "Lỗi thanh toán",
+        message: isShiftErr
+          ? "Bạn chưa mở ca làm việc. Vui lòng mở ca trước khi thực hiện thanh toán."
+          : (error?.response?.data?.message || error?.message || "Không thể lưu đơn hàng xuống thiết bị"),
+        type: "error",
+        confirmText: isShiftErr ? "MỞ CA NGAY" : undefined,
+        onConfirm: isShiftErr ? () => setShowOpenShiftModal(true) : undefined,
+      });
     } finally {
       isCheckingOutRef.current = false;
       setIsSubmittingCheckout(false);
@@ -472,6 +562,30 @@ export default function PosScreen() {
 
   return (
     <SafeAreaView testID="pos-screen" className="flex-1 bg-white">
+      {/* Shift Status Bar */}
+      <View className="flex-row justify-between items-center px-4 py-2 bg-gray-50 border-b-2 border-black">
+        <View className="flex-row items-center flex-1 mr-2">
+          <Ionicons name="time-outline" size={16} color="#000" style={{ marginRight: 6 }} />
+          <Text className="text-xs font-bold text-black uppercase">
+            {isDemo ? 'Ca trải nghiệm' : 'Ca thu ngân'}:
+          </Text>
+          <View className={`ml-2 px-2 py-0.5 border ${hasActiveShift ? 'bg-green-100 border-green-600' : 'bg-amber-100 border-amber-600'}`}>
+            <Text className={`text-[10px] font-black ${hasActiveShift ? 'text-green-800' : 'text-amber-800'}`}>
+              {hasActiveShift ? `ĐANG MỞ (#${activeShiftId})` : 'CHƯA MỞ CA'}
+            </Text>
+          </View>
+        </View>
+        {!hasActiveShift && (
+          <TouchableOpacity
+            testID="btn-pos-open-shift-quick"
+            onPress={() => setShowOpenShiftModal(true)}
+            className="bg-black px-3 py-1.5 border-2 border-black flex-row items-center"
+          >
+            <Ionicons name="play-circle-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
+            <Text className="text-white text-[11px] font-black uppercase">Mở ca</Text>
+          </TouchableOpacity>
+        )}
+      </View>
       {/* Mobile Tab Switcher */}
       {!isDesktop && (
         <View className="flex-row border-b-2 border-black bg-white">
@@ -906,6 +1020,86 @@ export default function PosScreen() {
         onConfirm={handleConfirmCheckout}
         isSubmitting={isSubmittingCheckout}
       />
+
+      {/* Open Shift Modal */}
+      <Modal visible={showOpenShiftModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/70 justify-center items-center p-4">
+          <View className="bg-white w-[92%] max-w-sm p-5 border-4 border-black">
+            <View className="flex-row justify-between items-center mb-2">
+              <Text className="text-lg font-black uppercase text-black">
+                {isDemo ? "Mở ca trải nghiệm" : "Mở ca thu ngân"}
+              </Text>
+              <TouchableOpacity onPress={() => setShowOpenShiftModal(false)} className="p-1">
+                <Ionicons name="close" size={20} color="#000" />
+              </TouchableOpacity>
+            </View>
+            <Text className="text-xs text-gray-600 mb-4">
+              Nhập số tiền mặt đầu ca để bàn giao và bắt đầu ghi nhận giao dịch tại quầy POS.
+            </Text>
+
+            <View className="mb-4">
+              <Text className="text-xs font-bold text-black uppercase mb-1">
+                Tiền mặt đầu ca (VNĐ) *
+              </Text>
+              <View className="border-2 border-black bg-white px-3 h-12 justify-center">
+                <TextInput
+                  testID="input-pos-opening-cash"
+                  keyboardType="numeric"
+                  value={openingCashInput}
+                  onChangeText={(val) => {
+                    const cleaned = val.replace(/[^0-9]/g, "");
+                    setOpeningCashInput(cleaned ? Number(cleaned).toLocaleString("vi-VN") : "0");
+                  }}
+                  className="text-base font-black text-black font-mono"
+                  placeholder="0"
+                />
+              </View>
+              <Text className="text-[10px] text-gray-500 mt-1 italic">
+                * Tiền lẻ lót két phục vụ thối tiền cho khách đầu ca.
+              </Text>
+            </View>
+
+            {!isDemo && (
+              <View className="mb-5">
+                <Text className="text-xs font-bold text-black uppercase mb-1">
+                  Ghi chú mở ca (Tùy chọn)
+                </Text>
+                <View className="border-2 border-black bg-white px-3 py-2">
+                  <TextInput
+                    value={openingRemarksInput}
+                    onChangeText={setOpeningRemarksInput}
+                    placeholder="Nhập ghi chú hoặc mã quầy..."
+                    className="text-xs text-black"
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </View>
+            )}
+
+            <View className="flex-row gap-2">
+              <TouchableOpacity
+                onPress={() => setShowOpenShiftModal(false)}
+                className="flex-1 py-2.5 border-2 border-gray-400 items-center justify-center"
+              >
+                <Text className="text-xs font-bold text-gray-700 uppercase">Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="btn-submit-pos-open-shift"
+                onPress={handleConfirmOpenShift}
+                disabled={isOpeningShift}
+                className="flex-1 bg-black py-2.5 border-2 border-black items-center justify-center flex-row"
+              >
+                {isOpeningShift ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text className="text-xs font-black text-white uppercase">Mở ca ngay</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
