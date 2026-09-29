@@ -3,6 +3,7 @@ import { saveTokens, clearTokens, saveUserProfile, getUserProfile, getAccessToke
 import { isDemoUser } from "@/utils/roleUtils";
 import { API_BASE_URL } from "@/config/apiConfig";
 import { logger } from "@/utils/logger";
+import { useShiftStore } from "@/store/useShiftStore";
 
 export interface User {
     id: number;
@@ -40,6 +41,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         await saveTokens(accessToken, refreshToken);
         await saveUserProfile(normalizedUser);
         set({ user: normalizedUser, token: accessToken, isAuthenticated: true, isHydrating: false });
+        if (!isDemo && normalizedUser.role !== 'WarehouseStaff') {
+            useShiftStore.getState().fetchCurrentShift().catch(() => {});
+        }
     },
     setToken: (token) => {
         set({ token, isAuthenticated: !!token });
@@ -50,6 +54,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         } catch (error) {
             console.error('[Auth] Lỗi khi xóa token:', error);
         } finally {
+            useShiftStore.getState().clearCurrentShift();
             set({ user: null, token: null, isAuthenticated: false, isHydrating: false });
         }
     },
@@ -131,6 +136,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
             if (user && token) {
                 set({ user, token, isAuthenticated: true, isHydrating: false });
+                if (!isDemo && user.role !== 'WarehouseStaff') {
+                    useShiftStore.getState().fetchCurrentShift().catch(() => {});
+                }
                 return true;
             } else {
                 set({ user: null, token: null, isAuthenticated: false, isHydrating: false });

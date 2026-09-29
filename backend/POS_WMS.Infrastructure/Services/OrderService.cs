@@ -161,7 +161,37 @@ namespace POS_WMS.Infrastructure.Services
                     throw new InvalidOperationException($"Sản phẩm chưa được cấu hình giá bán, không thể thanh toán: {names}");
                 }
 
-                var openShift = await _context.Shifts.FirstOrDefaultAsync(s => s.UserId == effectiveUserId && s.Status == ShiftStatus.Open);
+                // Strict Shift validation for paid/completed orders
+                Shift? activeShift = null;
+                if (request.Status == OrderStatus.Completed)
+                {
+                    if (request.ShiftId.HasValue && request.ShiftId.Value > 0)
+                    {
+                        activeShift = await _context.Shifts.FirstOrDefaultAsync(s => s.Id == request.ShiftId.Value);
+                        if (activeShift == null)
+                        {
+                            throw new InvalidOperationException("SHIFT_NOT_FOUND: Ca làm việc không tồn tại trên hệ thống.");
+                        }
+
+                        if (activeShift.UserId != effectiveUserId)
+                        {
+                            throw new UnauthorizedAccessException("SHIFT_ACCESS_DENIED: Bạn không có quyền sử dụng ca làm việc của người khác.");
+                        }
+
+                        if (activeShift.Status != ShiftStatus.Open)
+                        {
+                            throw new InvalidOperationException("SHIFT_ALREADY_CLOSED: Ca làm việc đã kết thúc và không thể phát sinh thêm giao dịch.");
+                        }
+                    }
+                    else
+                    {
+                        activeShift = await _context.Shifts.FirstOrDefaultAsync(s => s.UserId == effectiveUserId && s.Status == ShiftStatus.Open);
+                        if (activeShift == null)
+                        {
+                            throw new InvalidOperationException("SHIFT_NOT_OPEN: Bạn cần mở ca trước khi thực hiện giao dịch bán hàng.");
+                        }
+                    }
+                }
 
                 var order = new Order
                 {
@@ -172,7 +202,7 @@ namespace POS_WMS.Infrastructure.Services
                     Status = request.Status,
                     PaymentMethod = normalizedPaymentMethod,
                     OfflineReferenceId = request.OfflineReferenceId,
-                    ShiftId = request.ShiftId ?? openShift?.Id
+                    ShiftId = activeShift?.Id ?? request.ShiftId
                 };
 
                 await _context.Orders.AddAsync(order);

@@ -8,6 +8,7 @@ export interface ShiftDto {
   startedAt: string;
   endedAt?: string | null;
   status: string;
+  openingCash?: number;
   finalReportSnapshot?: string | null;
   closingRemarks?: string | null;
 }
@@ -22,13 +23,24 @@ export interface ShiftReportDto {
   status: string;
   closingRemarks?: string | null;
 
+  // Cash drawer & till reconciliation
+  openingCash?: number;
+  cashRevenue: number;
+  qrRevenue: number;
+  totalRevenue: number;
+  expectedCash?: number;
+  actualCash?: number | null;
+  difference?: number | null;
+
+  // Admin/Manager force-close metadata
+  closedByUserId?: number | null;
+  closedByUserName?: string | null;
+  forceCloseReason?: string | null;
+
   // Cashier
   orderCount: number;
   completedOrderCount: number;
   canceledOrderCount: number;
-  cashRevenue: number;
-  qrRevenue: number;
-  totalRevenue: number;
   pendingSyncCount: number;
 
   // Warehouse
@@ -50,8 +62,8 @@ export const shiftApi = {
     return res.data ?? null;
   },
 
-  openShift: async (remarks?: string): Promise<ShiftDto> => {
-    const res = await apiClient.post<any>("/shifts/open", { remarks });
+  openShift: async (openingCash?: number, remarks?: string): Promise<ShiftDto> => {
+    const res = await apiClient.post<any>("/shifts/open", { openingCash: openingCash || 0, remarks });
     if (res.data && typeof res.data === 'object' && 'data' in res.data) {
       return res.data.data;
     }
@@ -66,8 +78,16 @@ export const shiftApi = {
     return res.data;
   },
 
-  endShift: async (shiftId: number, closingRemarks?: string): Promise<ShiftReportDto> => {
-    const res = await apiClient.post<any>(`/shifts/${shiftId}/end`, { closingRemarks });
+  endShift: async (shiftId: number, actualCash?: number, closingRemarks?: string): Promise<ShiftReportDto> => {
+    const res = await apiClient.post<any>(`/shifts/${shiftId}/end`, { actualCash, closingRemarks });
+    if (res.data && typeof res.data === 'object' && 'data' in res.data) {
+      return res.data.data;
+    }
+    return res.data;
+  },
+
+  forceCloseShift: async (shiftId: number, reason: string): Promise<ShiftReportDto> => {
+    const res = await apiClient.post<any>(`/shifts/${shiftId}/force-close`, { reason });
     if (res.data && typeof res.data === 'object' && 'data' in res.data) {
       return res.data.data;
     }

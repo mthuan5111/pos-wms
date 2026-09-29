@@ -70,13 +70,14 @@ namespace POS_WMS.WebApi.Controllers
         {
             try
             {
-                if (request.UserId <= 0)
+                var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                int callerUserId = int.TryParse(userIdClaim, out var claimUserId) ? claimUserId : 0;
+                var userRole = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "Cashier";
+
+                // Cashier must use their own authenticated Identity
+                if (string.Equals(userRole, "Cashier", StringComparison.OrdinalIgnoreCase) || request.UserId <= 0)
                 {
-                    var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-                    if (int.TryParse(userIdClaim, out var claimUserId))
-                    {
-                        request.UserId = claimUserId;
-                    }
+                    request.UserId = callerUserId;
                 }
 
                 var orderId = await _orderService.SyncOfflineOrderAsync(request);
@@ -92,8 +93,24 @@ namespace POS_WMS.WebApi.Controllers
             {
                 return BadRequest(ApiResponse<string>.Failure(ex.Message));
             }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, ApiResponse<string>.Failure(ex.Message, "SHIFT_ACCESS_DENIED"));
+            }
             catch (InvalidOperationException ex)
             {
+                if (ex.Message.StartsWith("SHIFT_NOT_OPEN:"))
+                {
+                    return StatusCode(409, ApiResponse<string>.Failure("Bạn cần mở ca trước khi thực hiện giao dịch bán hàng.", "SHIFT_NOT_OPEN"));
+                }
+                if (ex.Message.StartsWith("SHIFT_ALREADY_CLOSED:"))
+                {
+                    return StatusCode(409, ApiResponse<string>.Failure("Ca làm việc đã kết thúc và không thể phát sinh thêm giao dịch.", "SHIFT_ALREADY_CLOSED"));
+                }
+                if (ex.Message.StartsWith("SHIFT_NOT_FOUND:"))
+                {
+                    return StatusCode(404, ApiResponse<string>.Failure("Ca làm việc không tồn tại trên hệ thống.", "SHIFT_NOT_FOUND"));
+                }
                 return BadRequest(ApiResponse<string>.Failure(ex.Message));
             }
             catch (Exception ex)

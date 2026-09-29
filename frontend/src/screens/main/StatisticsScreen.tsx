@@ -6,7 +6,8 @@ import {
   TouchableOpacity,
   Platform,
   ActivityIndicator,
-  Modal
+  Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/store/authStore';
@@ -42,6 +43,11 @@ export default function StatisticsScreen() {
   const [showShiftSummaryModal, setShowShiftSummaryModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [reportData, setReportData] = useState<ShiftReportDto | null>(null);
+
+  const [openingCashInput, setOpeningCashInput] = useState("0");
+  const [openingRemarksInput, setOpeningRemarksInput] = useState("");
+  const [actualCashInput, setActualCashInput] = useState("0");
+  const [closingRemarksInput, setClosingRemarksInput] = useState("");
 
   const isShiftActionRef = useRef(false);
 
@@ -143,7 +149,10 @@ export default function StatisticsScreen() {
         return;
       }
 
-      const activeShift = await fetchCurrentShift();
+      let activeShift = null;
+      if (role !== 'WarehouseStaff') {
+        activeShift = await fetchCurrentShift();
+      }
       const shiftStartTime = activeShift?.startedAt ? new Date(activeShift.startedAt).getTime() : 0;
       const activeShiftId = activeShift?.id || (activeShift as any)?.Id;
 
@@ -240,9 +249,12 @@ export default function StatisticsScreen() {
     isShiftActionRef.current = true;
     try {
       setIsLoading(true);
+      const parsedCash = parseFloat(openingCashInput.replace(/[^0-9]/g, "")) || 0;
       if (isDemo) {
-        await useDemoSandboxStore.getState().openShift();
+        await useDemoSandboxStore.getState().openShift(parsedCash);
         setShowOpenShiftModal(false);
+        setOpeningCashInput("0");
+        setOpeningRemarksInput("");
         showModal({
           title: 'Mở ca trải nghiệm',
           message: 'Ca làm việc thử nghiệm mới đã được bắt đầu trong Demo Sandbox.',
@@ -251,11 +263,13 @@ export default function StatisticsScreen() {
         await loadData();
         return;
       }
-      await openShift();
+      await openShift(parsedCash, openingRemarksInput);
       setShowOpenShiftModal(false);
+      setOpeningCashInput("0");
+      setOpeningRemarksInput("");
       showModal({
         title: 'Mở ca thành công',
-        message: 'Ca làm việc mới đã được bắt đầu.',
+        message: 'Ca làm việc mới đã được bắt đầu với số tiền đầu ca: ' + formatCurrency(parsedCash),
         type: 'success'
       });
       await loadData();
@@ -287,6 +301,8 @@ export default function StatisticsScreen() {
     try {
       setIsLoading(true);
       if (isDemo) {
+        const openCash = demoShift?.startingCash || 0;
+        const expCash = openCash + cashierStats.cashAmount;
         const preview: ShiftReportDto = {
           shiftId: shiftId,
           userId: user?.id || 0,
@@ -294,6 +310,8 @@ export default function StatisticsScreen() {
           role: 'DemoUser',
           startedAt: demoShift?.startedAt || new Date().toISOString(),
           status: 'Open',
+          openingCash: openCash,
+          expectedCash: expCash,
           orderCount: cashierStats.orderCount,
           completedOrderCount: cashierStats.orderCount,
           canceledOrderCount: cashierStats.canceledCount,
@@ -310,6 +328,8 @@ export default function StatisticsScreen() {
           adjustmentDecreaseQuantity: warehouseStats.totalQtyDecrease,
         };
         setReportData(preview);
+        setActualCashInput(String(expCash));
+        setClosingRemarksInput("");
         setShowShiftSummaryModal(true);
         return;
       }
@@ -320,6 +340,7 @@ export default function StatisticsScreen() {
         preview = await getShiftPreview(shiftId);
       } catch {
         // Fallback to local stats if offline
+        const openCash = currentShift?.openingCash || 0;
         preview = {
           shiftId: shiftId,
           userId: user?.id || 0,
@@ -327,6 +348,8 @@ export default function StatisticsScreen() {
           role: role,
           startedAt: currentShift?.startedAt || new Date().toISOString(),
           status: 'Open',
+          openingCash: openCash,
+          expectedCash: openCash + cashierStats.cashAmount,
           orderCount: cashierStats.orderCount,
           completedOrderCount: cashierStats.orderCount,
           canceledOrderCount: cashierStats.canceledCount,
@@ -343,7 +366,10 @@ export default function StatisticsScreen() {
           adjustmentDecreaseQuantity: warehouseStats.totalQtyDecrease,
         };
       }
+      const expCash = preview.expectedCash ?? ((preview.openingCash || 0) + (preview.cashRevenue || 0));
       setReportData(preview);
+      setActualCashInput(String(expCash));
+      setClosingRemarksInput("");
       setShowShiftSummaryModal(true);
     } catch (err: any) {
       showModal({
@@ -363,8 +389,9 @@ export default function StatisticsScreen() {
 
     try {
       setIsLoading(true);
+      const parsedActualCash = parseFloat(actualCashInput.replace(/[^0-9]/g, "")) || 0;
       if (isDemo) {
-        const closedShift = await useDemoSandboxStore.getState().closeShift(0);
+        const closedShift = await useDemoSandboxStore.getState().closeShift(parsedActualCash, closingRemarksInput);
         const closedReport: ShiftReportDto = {
           shiftId: closedShift?.shiftCode || shiftId,
           userId: user?.id || 0,
@@ -373,12 +400,17 @@ export default function StatisticsScreen() {
           startedAt: closedShift?.startedAt || demoShift?.startedAt || new Date().toISOString(),
           endedAt: closedShift?.endedAt || new Date().toISOString(),
           status: 'Closed',
-          orderCount: cashierStats.orderCount,
+          openingCash: closedShift?.startingCash || 0,
+          cashRevenue: closedShift?.cashRevenue || 0,
+          qrRevenue: closedShift?.qrRevenue || 0,
+          expectedCash: closedShift?.expectedCash || 0,
+          actualCash: closedShift?.endingCash || parsedActualCash,
+          difference: closedShift?.difference || 0,
+          closingRemarks: closingRemarksInput,
+          totalRevenue: closedShift?.totalRevenue || cashierStats.totalRevenue,
+          orderCount: closedShift?.orderCount || cashierStats.orderCount,
           completedOrderCount: cashierStats.orderCount,
           canceledOrderCount: cashierStats.canceledCount,
-          cashRevenue: cashierStats.cashAmount,
-          qrRevenue: cashierStats.qrAmount,
-          totalRevenue: cashierStats.totalRevenue,
           pendingSyncCount: cashierStats.unsyncedCount,
           receiptCount: warehouseStats.receiptCount,
           totalReceiptAmount: warehouseStats.totalReceiptValue,
@@ -406,7 +438,7 @@ export default function StatisticsScreen() {
         console.warn('[StatisticsScreen] Pre-close sync warning:', syncErr);
       }
 
-      const closedReport = await endShift(shiftId);
+      const closedReport = await endShift(shiftId, parsedActualCash, closingRemarksInput);
       setReportData(closedReport);
 
       showModal({
@@ -439,6 +471,12 @@ export default function StatisticsScreen() {
       startedAt: reportData.startedAt,
       endedAt: reportData.endedAt || new Date().toISOString(),
       status: reportData.status,
+      openingCash: reportData.openingCash,
+      expectedEndingCash: reportData.expectedCash,
+      actualEndingCash: reportData.actualCash ?? undefined,
+      difference: reportData.difference ?? undefined,
+      closedByUserName: reportData.closedByUserName,
+      forceCloseReason: reportData.forceCloseReason,
       orderCount: reportData.orderCount || 0,
       completedOrderCount: reportData.completedOrderCount || reportData.orderCount || 0,
       canceledOrderCount: reportData.canceledOrderCount || 0,
@@ -451,7 +489,8 @@ export default function StatisticsScreen() {
       receiptQuantityTotal: reportData.receiptQuantityTotal || 0,
       adjustmentIncreaseQuantity: reportData.adjustmentIncreaseQuantity || 0,
       adjustmentDecreaseQuantity: reportData.adjustmentDecreaseQuantity || 0,
-      notes: reportData.closingRemarks || undefined,
+      closingRemarks: reportData.closingRemarks || closingRemarksInput || undefined,
+      notes: reportData.closingRemarks || closingRemarksInput || undefined,
       isDemo: isDemo,
     }, { paperSize: '80mm' });
 
@@ -480,64 +519,70 @@ export default function StatisticsScreen() {
         contentContainerStyle={{ paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* SHIFT STATUS BANNER */}
-        <View className="border-2 border-black p-5 mb-6 bg-white">
-          <View className="flex-row justify-between items-center mb-3">
-            <Text className="font-black text-black uppercase tracking-widest text-xs">
-              Ca làm việc {isDemo ? 'trải nghiệm' : (role === 'Cashier' ? 'thu ngân' : role === 'WarehouseStaff' ? 'thủ kho' : 'quản lý')}
-            </Text>
-            <View className={`px-2 py-0.5 border ${hasActiveShift ? 'bg-green-100 border-green-600' : 'bg-yellow-100 border-yellow-600'}`}>
-              <Text className={`text-[10px] font-bold ${hasActiveShift ? 'text-green-800' : 'text-yellow-800'}`}>
-                {hasActiveShift ? `ĐANG TRONG CA (#${shiftId})` : 'CHƯA MỞ CA'}
+        {/* SHIFT STATUS BANNER - EXCLUDE WAREHOUSE STAFF */}
+        {role !== 'WarehouseStaff' && (
+          <View className="border-2 border-black p-5 mb-6 bg-white">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="font-black text-black uppercase tracking-widest text-xs">
+                Ca làm việc {isDemo ? 'trải nghiệm' : (role === 'Cashier' ? 'thu ngân' : 'quản lý')}
               </Text>
+              <View className={`px-2 py-0.5 border ${hasActiveShift ? 'bg-green-100 border-green-600' : 'bg-yellow-100 border-yellow-600'}`}>
+                <Text className={`text-[10px] font-bold ${hasActiveShift ? 'text-green-800' : 'text-yellow-800'}`}>
+                  {hasActiveShift ? `ĐANG TRONG CA (#${shiftId})` : 'CHƯA MỞ CA'}
+                </Text>
+              </View>
+            </View>
+            <View style={{ width: '100%', height: 2, backgroundColor: '#000', marginBottom: 14 }} />
+
+            {hasActiveShift ? (
+              <>
+                <View className="flex-row justify-between mb-2">
+                  <Text className="text-xs font-bold text-gray-600">Bắt đầu:</Text>
+                  <Text className="text-xs font-bold text-black font-mono">{formatVietnamDateTime(isDemo ? (demoShift?.startedAt || '') : (currentShift?.startedAt || ''))}</Text>
+                </View>
+                <View className="flex-row justify-between mb-2">
+                  <Text className="text-xs font-bold text-gray-600">Người thực hiện:</Text>
+                  <Text className="text-xs font-bold text-black">{isDemo ? 'Khách Trải Nghiệm (@demo_viewer)' : `${user?.name || user?.username} (@${user?.username})`}</Text>
+                </View>
+                <View className="flex-row justify-between mb-2">
+                  <Text className="text-xs font-bold text-gray-600">Tiền đầu ca:</Text>
+                  <Text className="text-xs font-black text-black">{formatCurrency(isDemo ? (demoShift?.startingCash || 0) : (currentShift?.openingCash || 0))}</Text>
+                </View>
+              </>
+            ) : (
+              <Text className="text-xs text-gray-600 italic mb-2">
+                Bạn chưa mở ca làm việc. Vui lòng nhấn "Mở ca" để bắt đầu ghi nhận giao dịch tại quầy.
+              </Text>
+            )}
+
+            {/* Shift Action Buttons */}
+            <View className="mt-4 pt-4 border-t border-gray-200">
+              {!hasActiveShift ? (
+                <TouchableOpacity
+                  testID="btn-open-shift"
+                  onPress={() => setShowOpenShiftModal(true)}
+                  className="bg-black py-3 px-4 border-2 border-black items-center justify-center flex-row"
+                >
+                  <Ionicons name="play-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+                  <Text className="text-white font-black uppercase tracking-wider text-xs">
+                    Mở ca
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  testID="btn-end-shift"
+                  onPress={handleStartEndShiftFlow}
+                  className="bg-black py-3 px-4 border-2 border-black items-center justify-center flex-row"
+                >
+                  <Ionicons name="stop-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+                  <Text className="text-white font-black uppercase tracking-wider text-xs">
+                    Kết thúc ca
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
-          <View style={{ width: '100%', height: 2, backgroundColor: '#000', marginBottom: 14 }} />
-
-          {hasActiveShift ? (
-            <>
-              <View className="flex-row justify-between mb-2">
-                <Text className="text-xs font-bold text-gray-600">Bắt đầu:</Text>
-                <Text className="text-xs font-bold text-black font-mono">{formatVietnamDateTime(isDemo ? (demoShift?.startedAt || '') : (currentShift?.startedAt || ''))}</Text>
-              </View>
-              <View className="flex-row justify-between mb-2">
-                <Text className="text-xs font-bold text-gray-600">Người thực hiện:</Text>
-                <Text className="text-xs font-bold text-black">{isDemo ? 'Khách Trải Nghiệm (@demo_viewer)' : `${user?.name || user?.username} (@${user?.username})`}</Text>
-              </View>
-            </>
-          ) : (
-            <Text className="text-xs text-gray-600 italic mb-2">
-              Bạn chưa mở ca làm việc. Vui lòng nhấn "Mở ca" để bắt đầu ghi nhận giao dịch.
-            </Text>
-          )}
-
-          {/* Shift Action Buttons */}
-          <View className="mt-4 pt-4 border-t border-gray-200">
-            {!hasActiveShift ? (
-              <TouchableOpacity
-                testID="btn-open-shift"
-                onPress={() => setShowOpenShiftModal(true)}
-                className="bg-black py-3 px-4 border-2 border-black items-center justify-center flex-row"
-              >
-                <Ionicons name="play-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-                <Text className="text-white font-black uppercase tracking-wider text-xs">
-                  Mở ca
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                testID="btn-end-shift"
-                onPress={handleStartEndShiftFlow}
-                className="bg-black py-3 px-4 border-2 border-black items-center justify-center flex-row"
-              >
-                <Ionicons name="stop-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-                <Text className="text-white font-black uppercase tracking-wider text-xs">
-                  Kết thúc ca
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
+        )}
 
         {/* ===================== CASHIER VIEW ===================== */}
         {role === 'Cashier' && (
@@ -685,10 +730,58 @@ export default function StatisticsScreen() {
       <Modal visible={showOpenShiftModal} transparent animationType="fade">
         <View className="flex-1 bg-black/70 justify-center items-center p-4">
           <View className="bg-white w-[92%] max-w-sm p-5 border-4 border-black">
-            <Text className="text-lg font-black uppercase text-black mb-2">Mở ca làm việc</Text>
-            <Text className="text-xs text-gray-600 mb-5">
-              Bạn có chắc chắn muốn mở ca làm việc mới? Toàn bộ giao dịch sẽ được liên kết với ca này.
+            <View className="flex-row justify-between items-center mb-2">
+              <Text className="text-lg font-black uppercase text-black">
+                {isDemo ? "Mở ca trải nghiệm" : "Mở ca làm việc"}
+              </Text>
+              <TouchableOpacity onPress={() => setShowOpenShiftModal(false)} className="p-1">
+                <Ionicons name="close" size={20} color="#000" />
+              </TouchableOpacity>
+            </View>
+            <Text className="text-xs text-gray-600 mb-4">
+              Nhập số tiền mặt đầu ca để bàn giao và bắt đầu ghi nhận giao dịch tại quầy.
             </Text>
+
+            <View className="mb-4">
+              <Text className="text-xs font-bold text-black uppercase mb-1">
+                Tiền mặt đầu ca (VNĐ) *
+              </Text>
+              <View className="border-2 border-black bg-white px-3 h-12 justify-center">
+                <TextInput
+                  testID="input-stat-opening-cash"
+                  keyboardType="numeric"
+                  value={openingCashInput}
+                  onChangeText={(val) => {
+                    const cleaned = val.replace(/[^0-9]/g, "");
+                    setOpeningCashInput(cleaned ? Number(cleaned).toLocaleString("vi-VN") : "0");
+                  }}
+                  className="text-base font-black text-black font-mono"
+                  placeholder="0"
+                />
+              </View>
+              <Text className="text-[10px] text-gray-500 mt-1 italic">
+                * Tiền lẻ lót két phục vụ thối tiền cho khách đầu ca.
+              </Text>
+            </View>
+
+            {!isDemo && (
+              <View className="mb-5">
+                <Text className="text-xs font-bold text-black uppercase mb-1">
+                  Ghi chú mở ca (Tùy chọn)
+                </Text>
+                <View className="border-2 border-black bg-white px-3 py-2">
+                  <TextInput
+                    value={openingRemarksInput}
+                    onChangeText={setOpeningRemarksInput}
+                    placeholder="Nhập ghi chú hoặc mã quầy..."
+                    className="text-xs text-black"
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </View>
+            )}
+
             <View className="flex-row gap-2">
               <TouchableOpacity
                 onPress={() => setShowOpenShiftModal(false)}
@@ -714,80 +807,110 @@ export default function StatisticsScreen() {
           <View className="bg-white w-[94%] max-w-md p-5 border-4 border-black max-h-[90%]">
             <View className="pb-3 border-b-2 border-black mb-4">
               <Text className="text-lg font-black uppercase text-black">Tổng kết ca làm việc</Text>
-              <Text className="text-xs text-gray-600 mt-0.5">Xác nhận số liệu trước khi kết thúc ca</Text>
+              <Text className="text-xs text-gray-600 mt-0.5">Xác nhận số liệu và đối soát két trước khi kết thúc ca</Text>
             </View>
 
-            {reportData && (
-              <View className="bg-gray-50 p-4 border border-gray-300 mb-4 flex-col gap-1.5">
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-gray-600">Mã ca:</Text>
-                  <Text className="text-xs font-bold text-black">#{reportData.shiftId}</Text>
-                </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-gray-600">Bắt đầu:</Text>
-                  <Text className="text-xs font-bold text-black">{formatVietnamDateTime(reportData.startedAt)}</Text>
-                </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-gray-600">Người thực hiện:</Text>
-                  <Text className="text-xs font-bold text-black">{reportData.userName} ({reportData.role})</Text>
-                </View>
+            {reportData && (() => {
+              const openCash = reportData.openingCash || 0;
+              const cashRev = reportData.cashRevenue || 0;
+              const expCash = reportData.expectedCash ?? (openCash + cashRev);
+              const numActual = parseFloat(actualCashInput.replace(/[^0-9]/g, "")) || 0;
+              const diff = numActual - expCash;
 
-                {role === 'Cashier' && (
-                  <>
+              return (
+                <ScrollView className="max-h-[420px]" showsVerticalScrollIndicator={false}>
+                  <View className="bg-gray-50 p-4 border border-gray-300 mb-4 flex-col gap-1.5">
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-gray-600">Mã ca:</Text>
+                      <Text className="text-xs font-bold text-black">#{reportData.shiftId}</Text>
+                    </View>
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-gray-600">Bắt đầu:</Text>
+                      <Text className="text-xs font-bold text-black">{formatVietnamDateTime(reportData.startedAt)}</Text>
+                    </View>
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-gray-600">Người thực hiện:</Text>
+                      <Text className="text-xs font-bold text-black">{reportData.userName} ({reportData.role})</Text>
+                    </View>
+
+                    <View className="my-1 border-t border-gray-300" />
+                    <Text className="text-[11px] font-black uppercase text-gray-700">Doanh thu bán hàng</Text>
+
                     <View className="flex-row justify-between">
                       <Text className="text-xs text-gray-600">Phiếu bán:</Text>
-                      <Text className="text-xs font-bold text-black">{reportData.orderCount}</Text>
+                      <Text className="text-xs font-bold text-black">{reportData.orderCount} đơn</Text>
                     </View>
                     <View className="flex-row justify-between">
                       <Text className="text-xs text-gray-600">Tiền mặt:</Text>
                       <Text className="text-xs font-bold text-black">{formatCurrency(reportData.cashRevenue)}</Text>
                     </View>
                     <View className="flex-row justify-between">
-                      <Text className="text-xs text-gray-600">QR:</Text>
+                      <Text className="text-xs text-gray-600">QR / Chuyển khoản:</Text>
                       <Text className="text-xs font-bold text-black">{formatCurrency(reportData.qrRevenue)}</Text>
                     </View>
-                    <View className="flex-row justify-between pt-2 border-t border-gray-300">
-                      <Text className="text-xs font-black uppercase">DOANH THU:</Text>
+                    <View className="flex-row justify-between pt-1 border-t border-gray-200">
+                      <Text className="text-xs font-black uppercase">TỔNG DOANH THU:</Text>
                       <Text className="text-sm font-black text-black">{formatCurrency(reportData.totalRevenue)}</Text>
                     </View>
-                  </>
-                )}
 
-                {role === 'WarehouseStaff' && (
-                  <>
-                    <View className="flex-row justify-between">
-                      <Text className="text-xs text-gray-600">Phiếu nhập:</Text>
-                      <Text className="text-xs font-bold text-black">{reportData.receiptCount}</Text>
-                    </View>
-                    <View className="flex-row justify-between">
-                      <Text className="text-xs text-gray-600">Tổng tiền:</Text>
-                      <Text className="text-xs font-bold text-black">{formatCurrency(reportData.totalReceiptAmount)}</Text>
-                    </View>
-                    <View className="flex-row justify-between">
-                      <Text className="text-xs text-gray-600">Tổng lượng nhập:</Text>
-                      <Text className="text-xs font-bold text-black">{reportData.receiptQuantityTotal}</Text>
-                    </View>
-                    <View className="flex-row justify-between">
-                      <Text className="text-xs text-gray-600">Tăng / giảm:</Text>
-                      <Text className="text-xs font-bold text-black">+{reportData.adjustmentIncreaseQuantity} / -{reportData.adjustmentDecreaseQuantity}</Text>
-                    </View>
-                  </>
-                )}
+                    {/* TILL RECONCILIATION */}
+                    <View className="my-1 border-t border-gray-300" />
+                    <Text className="text-[11px] font-black uppercase text-black">Đối soát két tiền mặt</Text>
 
-                {role !== 'Cashier' && role !== 'WarehouseStaff' && (
-                  <>
-                    <View className="flex-row justify-between pt-1 border-t border-gray-200">
-                      <Text className="text-xs font-bold text-gray-700">Phiếu bán / Doanh thu:</Text>
-                      <Text className="text-xs font-bold text-black">{reportData.orderCount} / {formatCurrency(reportData.totalRevenue)}</Text>
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-gray-600">Tiền mặt đầu ca:</Text>
+                      <Text className="text-xs font-bold text-black">{formatCurrency(openCash)}</Text>
                     </View>
                     <View className="flex-row justify-between">
-                      <Text className="text-xs font-bold text-gray-700">Phiếu nhập / Tổng tiền:</Text>
-                      <Text className="text-xs font-bold text-black">{reportData.receiptCount} / {formatCurrency(reportData.totalReceiptAmount)}</Text>
+                      <Text className="text-xs text-gray-600">Tiền mặt bán được:</Text>
+                      <Text className="text-xs font-bold text-black">+{formatCurrency(cashRev)}</Text>
                     </View>
-                  </>
-                )}
-              </View>
-            )}
+                    <View className="flex-row justify-between pt-1 border-t border-gray-300">
+                      <Text className="text-xs font-bold text-black">Dự kiến trong két:</Text>
+                      <Text className="text-xs font-black text-black">{formatCurrency(expCash)}</Text>
+                    </View>
+
+                    <View className="mt-2">
+                      <Text className="text-xs font-bold text-black uppercase mb-1">
+                        Tiền thực tế kiểm đếm (VNĐ) *
+                      </Text>
+                      <View className="border-2 border-black bg-white px-3 h-10 justify-center">
+                        <TextInput
+                          testID="input-stat-actual-cash"
+                          keyboardType="numeric"
+                          value={actualCashInput}
+                          onChangeText={(val) => {
+                            const cleaned = val.replace(/[^0-9]/g, "");
+                            setActualCashInput(cleaned ? Number(cleaned).toLocaleString("vi-VN") : "0");
+                          }}
+                          className="text-sm font-black text-black font-mono"
+                          placeholder="0"
+                        />
+                      </View>
+                    </View>
+
+                    <View className="flex-row justify-between items-center mt-2 p-2 border border-black bg-white">
+                      <Text className="text-xs font-bold uppercase">Chênh lệch két:</Text>
+                      <Text className={`text-xs font-black font-mono ${diff === 0 ? 'text-green-700' : diff > 0 ? 'text-blue-700' : 'text-red-700'}`}>
+                        {diff === 0 ? "Khớp (0 đ)" : (diff > 0 ? `Thừa +${formatCurrency(diff)}` : `Thiếu -${formatCurrency(Math.abs(diff))}`)}
+                      </Text>
+                    </View>
+
+                    <View className="mt-2">
+                      <Text className="text-xs font-bold text-black uppercase mb-1">Ghi chú kết ca (Tùy chọn)</Text>
+                      <View className="border border-gray-400 bg-white px-2 py-1">
+                        <TextInput
+                          value={closingRemarksInput}
+                          onChangeText={setClosingRemarksInput}
+                          placeholder="Nhập lý do chênh lệch hoặc bàn giao..."
+                          className="text-xs text-black"
+                        />
+                      </View>
+                    </View>
+                  </View>
+                </ScrollView>
+              );
+            })()}
 
             <View className="flex-row gap-2">
               <TouchableOpacity
@@ -819,38 +942,67 @@ export default function StatisticsScreen() {
             </View>
 
             {reportData && (
-              <View className="bg-gray-50 p-4 border border-gray-300 mb-4 flex-col gap-1.5">
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-gray-600">Mã ca:</Text>
-                  <Text className="text-xs font-bold text-black">#{reportData.shiftId}</Text>
-                </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-gray-600">Người thực hiện:</Text>
-                  <Text className="text-xs font-bold text-black">{reportData.userName}</Text>
-                </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-gray-600">Bắt đầu:</Text>
-                  <Text className="text-xs font-bold text-black">{formatVietnamDateTime(reportData.startedAt)}</Text>
-                </View>
-                {reportData.endedAt && (
+              <ScrollView className="max-h-[420px]" showsVerticalScrollIndicator={false}>
+                <View className="bg-gray-50 p-4 border border-gray-300 mb-4 flex-col gap-1.5">
                   <View className="flex-row justify-between">
-                    <Text className="text-xs text-gray-600">Kết thúc:</Text>
-                    <Text className="text-xs font-bold text-black">{formatVietnamDateTime(reportData.endedAt)}</Text>
+                    <Text className="text-xs text-gray-600">Mã ca:</Text>
+                    <Text className="text-xs font-bold text-black">#{reportData.shiftId}</Text>
                   </View>
-                )}
-                {role === 'Cashier' && (
-                  <View className="flex-row justify-between pt-2 border-t border-gray-300">
-                    <Text className="text-xs font-black uppercase">DOANH THU:</Text>
+                  <View className="flex-row justify-between">
+                    <Text className="text-xs text-gray-600">Người thực hiện:</Text>
+                    <Text className="text-xs font-bold text-black">{reportData.userName}</Text>
+                  </View>
+                  <View className="flex-row justify-between">
+                    <Text className="text-xs text-gray-600">Bắt đầu:</Text>
+                    <Text className="text-xs font-bold text-black">{formatVietnamDateTime(reportData.startedAt)}</Text>
+                  </View>
+                  {reportData.endedAt && (
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-gray-600">Kết thúc:</Text>
+                      <Text className="text-xs font-bold text-black">{formatVietnamDateTime(reportData.endedAt)}</Text>
+                    </View>
+                  )}
+
+                  <View className="my-1 border-t border-gray-300" />
+                  <View className="flex-row justify-between">
+                    <Text className="text-xs text-gray-600">Doanh thu tiền mặt:</Text>
+                    <Text className="text-xs font-bold text-black">{formatCurrency(reportData.cashRevenue)}</Text>
+                  </View>
+                  <View className="flex-row justify-between">
+                    <Text className="text-xs text-gray-600">Doanh thu QR:</Text>
+                    <Text className="text-xs font-bold text-black">{formatCurrency(reportData.qrRevenue)}</Text>
+                  </View>
+                  <View className="flex-row justify-between pt-1 border-t border-gray-200">
+                    <Text className="text-xs font-black uppercase">TỔNG DOANH THU:</Text>
                     <Text className="text-sm font-black text-black">{formatCurrency(reportData.totalRevenue)}</Text>
                   </View>
-                )}
-                {role === 'WarehouseStaff' && (
-                  <View className="flex-row justify-between pt-2 border-t border-gray-300">
-                    <Text className="text-xs font-black uppercase">TỔNG TIỀN NHẬP:</Text>
-                    <Text className="text-sm font-black text-black">{formatCurrency(reportData.totalReceiptAmount)}</Text>
+
+                  <View className="my-1 border-t border-gray-300" />
+                  <Text className="text-[11px] font-black uppercase text-black">Đối soát két tiền mặt</Text>
+                  <View className="flex-row justify-between">
+                    <Text className="text-xs text-gray-600">Tiền đầu ca:</Text>
+                    <Text className="text-xs font-bold text-black">{formatCurrency(reportData.openingCash || 0)}</Text>
                   </View>
-                )}
-              </View>
+                  <View className="flex-row justify-between">
+                    <Text className="text-xs text-gray-600">Dự kiến trong két:</Text>
+                    <Text className="text-xs font-bold text-black">{formatCurrency(reportData.expectedCash || ((reportData.openingCash || 0) + (reportData.cashRevenue || 0)))}</Text>
+                  </View>
+                  {reportData.actualCash != null && (
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-gray-600">Thực tế kiểm đếm:</Text>
+                      <Text className="text-xs font-bold text-black">{formatCurrency(reportData.actualCash)}</Text>
+                    </View>
+                  )}
+                  {reportData.difference != null && (
+                    <View className="flex-row justify-between pt-1 border-t border-gray-200">
+                      <Text className="text-xs font-black uppercase">CHÊNH LỆCH KÉT:</Text>
+                      <Text className={`text-xs font-black font-mono ${(reportData.difference || 0) === 0 ? 'text-green-700' : (reportData.difference || 0) > 0 ? 'text-blue-700' : 'text-red-700'}`}>
+                        {(reportData.difference || 0) === 0 ? "Khớp (0 đ)" : ((reportData.difference || 0) > 0 ? `Thừa +${formatCurrency(reportData.difference || 0)}` : `Thiếu -${formatCurrency(Math.abs(reportData.difference || 0))}`)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
             )}
 
             <View className="flex-row gap-2">
